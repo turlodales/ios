@@ -1,5 +1,5 @@
 //
-//  UIFont+Extensions.swift
+//  UIFont+Extension.swift
 //  Nextcloud
 //
 //  Created by Federico Malagoni on 23/02/22.
@@ -21,6 +21,7 @@
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
+import Foundation
 import UIKit
 
 extension UIFont {

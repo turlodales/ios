@@ -22,7 +22,7 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
 // MARK: - NCShareCommentsCell
 
@@ -34,9 +34,15 @@ class NCShareCommentsCell: UITableViewCell, NCCellProtocol {
     @IBOutlet weak var labelDate: UILabel!
     @IBOutlet weak var labelMessage: UILabel!
 
+    private var index = IndexPath()
+
     var tableComments: tableComments?
     weak var delegate: NCShareCommentsCellDelegate?
 
+    var indexPath: IndexPath {
+        get { return index }
+        set { index = newValue }
+    }
     var fileAvatarImageView: UIImageView? {
         return imageItem
     }
@@ -48,7 +54,6 @@ class NCShareCommentsCell: UITableViewCell, NCCellProtocol {
     override func awakeFromNib() {
         super.awakeFromNib()
 
-        buttonMenu.setImage(UIImage(named: "shareMenu")!.image(color: .lightGray, size: 50), for: .normal)
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(tapAvatarImage))
         imageItem?.addGestureRecognizer(tapGesture)
     }

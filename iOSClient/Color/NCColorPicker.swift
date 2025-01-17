@@ -5,6 +5,21 @@
 //  Created by Marino Faggiana on 24/07/22.
 //  Copyright © 2022 Marino Faggiana. All rights reserved.
 //
+//  Author Marino Faggiana <marino.faggiana@nextcloud.com>
+//
+//  This program is free software: you can redistribute it and/or modify
+//  it under the terms of the GNU General Public License as published by
+//  the Free Software Foundation, either version 3 of the License, or
+//  (at your option) any later version.
+//
+//  This program is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU General Public License for more details.
+//
+//  You should have received a copy of the GNU General Public License
+//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
 
 import Foundation
 import UIKit
@@ -41,7 +56,7 @@ class NCColorPicker: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        view.backgroundColor = NCBrandColor.shared.secondarySystemBackground
+        view.backgroundColor = .secondarySystemBackground
 
         if let metadata = metadata {
             let serverUrl = metadata.serverUrl + "/" + metadata.fileName
@@ -50,7 +65,7 @@ class NCColorPicker: UIViewController {
             }
         }
 
-        closeButton.setImage(NCUtility.shared.loadImage(named: "xmark", color: NCBrandColor.shared.label), for: .normal)
+        closeButton.setImage(NCUtility().loadImage(named: "xmark", colors: [NCBrandColor.shared.iconImageColor]), for: .normal)
         titleLabel.text = NSLocalizedString("_select_color_", comment: "")
 
         orangeButton.backgroundColor = .orange
@@ -89,7 +104,7 @@ class NCColorPicker: UIViewController {
         yellowButton.layer.cornerRadius = 5
         yellowButton.layer.masksToBounds = true
 
-        systemBlueButton.backgroundColor = NCBrandColor.shared.systemBlue
+        systemBlueButton.backgroundColor = .systemBlue
         systemBlueButton.layer.cornerRadius = 5
         systemBlueButton.layer.masksToBounds = true
 
@@ -97,28 +112,24 @@ class NCColorPicker: UIViewController {
         systemMintButton.layer.cornerRadius = 5
         systemMintButton.layer.masksToBounds = true
 
-        systemPinkButton.backgroundColor = NCBrandColor.shared.systemPink
+        systemPinkButton.backgroundColor = .systemPink
         systemPinkButton.layer.cornerRadius = 5
         systemPinkButton.layer.masksToBounds = true
 
-        if #available(iOS 14.0, *) {
-            customButton.setImage(UIImage(named: "rgb"), for: .normal)
-            if let selectedColor = selectedColor {
-                customButton.backgroundColor = selectedColor
-            } else {
-                customButton.backgroundColor = NCBrandColor.shared.secondarySystemBackground
-            }
+        customButton.setImage(UIImage(named: "rgb"), for: .normal)
+        if let selectedColor = selectedColor {
+            customButton.backgroundColor = selectedColor
         } else {
-            customButton.backgroundColor = NCBrandColor.shared.systemTeal
+            customButton.backgroundColor = .secondarySystemBackground
         }
         customButton.layer.cornerRadius = 5
         customButton.layer.masksToBounds = true
 
-        systemIndigoButton.backgroundColor = NCBrandColor.shared.systemIndigo
+        systemIndigoButton.backgroundColor = .systemIndigo
         systemIndigoButton.layer.cornerRadius = 5
         systemIndigoButton.layer.masksToBounds = true
 
-        defaultButton.backgroundColor = NCBrandColor.shared.brandElement
+        defaultButton.backgroundColor = NCBrandColor.shared.customer
         defaultButton.layer.cornerRadius = 5
         defaultButton.layer.masksToBounds = true
     }
@@ -166,11 +177,11 @@ class NCColorPicker: UIViewController {
     }
 
     @IBAction func systemBlueButtonAction(_ sender: AnyObject) {
-        updateColor(hexColor: NCBrandColor.shared.systemBlue.hexString)
+        updateColor(hexColor: UIColor.systemBlue.hexString)
     }
 
     @IBAction func systemIndigoButtonAction(_ sender: AnyObject) {
-        updateColor(hexColor: NCBrandColor.shared.systemIndigo.hexString)
+        updateColor(hexColor: UIColor.systemIndigo.hexString)
     }
 
     @IBAction func systemMintButtonAction(_ sender: AnyObject) {
@@ -178,7 +189,7 @@ class NCColorPicker: UIViewController {
     }
 
     @IBAction func systemPinkButtonAction(_ sender: AnyObject) {
-        updateColor(hexColor: NCBrandColor.shared.systemPink.hexString)
+        updateColor(hexColor: UIColor.systemPink.hexString)
     }
 
     @IBAction func defaultButtonAction(_ sender: AnyObject) {
@@ -187,17 +198,13 @@ class NCColorPicker: UIViewController {
 
     @IBAction func customButtonAction(_ sender: AnyObject) {
 
-        if #available(iOS 14.0, *) {
-            let picker = UIColorPickerViewController()
-            picker.delegate = self
-            picker.supportsAlpha = false
-            if let selectedColor = selectedColor {
-                picker.selectedColor = selectedColor
-            }
-            self.present(picker, animated: true, completion: nil)
-        } else {
-            updateColor(hexColor: NCBrandColor.shared.systemTeal.hexString)
+        let picker = UIColorPickerViewController()
+        picker.delegate = self
+        picker.supportsAlpha = false
+        if let selectedColor = selectedColor {
+            picker.selectedColor = selectedColor
         }
+        self.present(picker, animated: true, completion: nil)
     }
 
     // MARK: -
@@ -205,16 +212,14 @@ class NCColorPicker: UIViewController {
     func updateColor(hexColor: String?) {
         if let metadata = metadata {
             let serverUrl = metadata.serverUrl + "/" + metadata.fileName
-            if NCManageDatabase.shared.setDirectory(serverUrl: serverUrl, colorFolder: hexColor, account: metadata.account) != nil {
-                self.dismiss(animated: true)
-                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterReloadDataSource, userInfo: ["serverUrl": metadata.serverUrl])
-            }
+            NCManageDatabase.shared.updateDirectoryColorFolder(hexColor, metadata: metadata, serverUrl: serverUrl)
+            self.dismiss(animated: true)
+            NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterReloadDataSource, userInfo: ["serverUrl": metadata.serverUrl, "clearDataSource": true])
         }
         self.dismiss(animated: true)
     }
 }
 
-@available(iOS 14.0, *)
 extension NCColorPicker: UIColorPickerViewControllerDelegate {
 
     func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {

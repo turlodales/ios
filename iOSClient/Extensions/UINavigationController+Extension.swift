@@ -22,11 +22,58 @@
 //
 
 import Foundation
+import UIKit
 
 extension UINavigationController {
 
     // https://stackoverflow.com/questions/6131205/how-to-find-topmost-view-controller-on-ios
     override func topMostViewController() -> UIViewController {
         return self.visibleViewController!.topMostViewController()
+    }
+
+    func setNavigationBarAppearance() {
+
+        navigationBar.tintColor = NCBrandColor.shared.iconImageColor
+
+        let standardAppearance = UINavigationBarAppearance()
+        standardAppearance.configureWithDefaultBackground()
+
+        standardAppearance.largeTitleTextAttributes = [NSAttributedString.Key.foregroundColor: NCBrandColor.shared.textColor]
+        standardAppearance.titleTextAttributes = [NSAttributedString.Key.foregroundColor: NCBrandColor.shared.textColor]
+        navigationBar.standardAppearance = standardAppearance
+
+        let scrollEdgeAppearance = UINavigationBarAppearance()
+        scrollEdgeAppearance.configureWithDefaultBackground()
+
+        scrollEdgeAppearance.backgroundColor = .systemBackground
+        scrollEdgeAppearance.shadowColor = .clear
+        scrollEdgeAppearance.shadowImage = UIImage()
+        navigationBar.scrollEdgeAppearance = scrollEdgeAppearance
+    }
+
+    func setGroupAppearance() {
+
+        navigationBar.tintColor = NCBrandColor.shared.iconImageColor
+
+        let standardAppearance = UINavigationBarAppearance()
+        standardAppearance.configureWithDefaultBackground()
+
+        standardAppearance.largeTitleTextAttributes = [NSAttributedString.Key.foregroundColor: NCBrandColor.shared.textColor]
+        standardAppearance.titleTextAttributes = [NSAttributedString.Key.foregroundColor: NCBrandColor.shared.textColor]
+        standardAppearance.backgroundColor = .systemGray6
+        navigationBar.standardAppearance = standardAppearance
+
+        let scrollEdgeAppearance = UINavigationBarAppearance()
+        scrollEdgeAppearance.configureWithDefaultBackground()
+
+        scrollEdgeAppearance.backgroundColor = .systemGroupedBackground
+        scrollEdgeAppearance.shadowColor = .clear
+        scrollEdgeAppearance.shadowImage = UIImage()
+        navigationBar.scrollEdgeAppearance = scrollEdgeAppearance
+    }
+
+    func setMediaAppreance() {
+
+        setNavigationBarHidden(true, animated: false)
     }
 }

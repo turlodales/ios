@@ -22,12 +22,10 @@
 //
 
 import UIKit
+import AVFAudio
+import Photos
 
 class NCAskAuthorization: NSObject {
-    @objc static let shared: NCAskAuthorization = {
-        let instance = NCAskAuthorization()
-        return instance
-    }()
 
     private(set) var isRequesting = false
 
@@ -36,11 +34,12 @@ class NCAskAuthorization: NSObject {
         switch AVAudioSession.sharedInstance().recordPermission {
         case AVAudioSession.RecordPermission.granted:
             completion(true)
-            break
         case AVAudioSession.RecordPermission.denied:
             let alert = UIAlertController(title: NSLocalizedString("_error_", comment: ""), message: NSLocalizedString("_err_permission_microphone_", comment: ""), preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: NSLocalizedString("_open_settings_", comment: ""), style: .default, handler: { _ in
+#if !EXTENSION
                 UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
+#endif
                 completion(false)
             }))
             alert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel, handler: { _ in
@@ -49,7 +48,6 @@ class NCAskAuthorization: NSObject {
             DispatchQueue.main.async {
                 viewController?.present(alert, animated: true, completion: nil)
             }
-            break
         case AVAudioSession.RecordPermission.undetermined:
             AVAudioSession.sharedInstance().requestRecordPermission { allowed in
                 DispatchQueue.main.async {
@@ -60,39 +58,37 @@ class NCAskAuthorization: NSObject {
                     }
                 }
             }
-            break
         default:
             completion(false)
-            break
         }
     }
 
-    @objc func askAuthorizationPhotoLibrary(viewController: UIViewController?, completion: @escaping (_ hasPermission: Bool) -> Void) {
+    @objc func askAuthorizationPhotoLibrary(controller: UIViewController?, completion: @escaping (_ hasPermission: Bool) -> Void) {
 
         switch PHPhotoLibrary.authorizationStatus() {
         case PHAuthorizationStatus.authorized:
             completion(true)
-            break
         case PHAuthorizationStatus.denied, PHAuthorizationStatus.limited, PHAuthorizationStatus.restricted:
             let alert = UIAlertController(title: NSLocalizedString("_error_", comment: ""), message: NSLocalizedString("_err_permission_photolibrary_", comment: ""), preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: NSLocalizedString("_open_settings_", comment: ""), style: .default, handler: { _ in
+#if !EXTENSION
                 UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
+#endif
                 completion(false)
             }))
             alert.addAction(UIAlertAction(title: NSLocalizedString("_cancel_", comment: ""), style: .cancel, handler: { _ in
                 completion(false)
             }))
             DispatchQueue.main.async {
-                viewController?.present(alert, animated: true, completion: nil)
+                controller?.present(alert, animated: true, completion: nil)
             }
-            break
         case PHAuthorizationStatus.notDetermined:
             isRequesting = true
             PHPhotoLibrary.requestAuthorization { allowed in
                 self.isRequesting = false
-                DispatchQueue.main.async {
-                    (UIApplication.shared.delegate as? AppDelegate)?.hidePrivacyProtectionWindow()
-                }
+#if !EXTENSION
+                // DispatchQueue.main.async { NCPasscode.shared.hidePrivacyProtectionWindow() }
+#endif
                 DispatchQueue.main.async {
                     if allowed == PHAuthorizationStatus.authorized {
                         completion(true)
@@ -101,10 +97,26 @@ class NCAskAuthorization: NSObject {
                     }
                 }
             }
-            break
         default:
             completion(false)
-            break
         }
     }
+
+#if !EXTENSION
+    func checkBackgroundRefreshStatus() {
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available:
+            print("Background fetch is enabled")
+        case .denied:
+            print("Background fetch is explicitly disabled")
+            // Redirect user to Settings page only once; Respect user's choice is important
+            UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
+        case .restricted:
+            // Should not redirect user to Settings since he / she cannot toggle the settings
+            print("Background fetch is restricted, e.g. under parental control")
+        default:
+            print("Unknown property")
+        }
+    }
+#endif
 }

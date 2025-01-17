@@ -22,34 +22,27 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
 public protocol NCAccountRequestDelegate: AnyObject {
     func accountRequestAddAccount()
-    func accountRequestChangeAccount(account: String)
-}
-
-// optional func
-public extension NCAccountRequestDelegate {
-    func accountRequestAddAccount() {}
-    func accountRequestChangeAccount(account: String) {}
+    func accountRequestChangeAccount(account: String, controller: UIViewController?)
 }
 
 class NCAccountRequest: UIViewController {
-
     @IBOutlet weak var titleLabel: UILabel!
-    @IBOutlet weak var closeButton: UIButton!
     @IBOutlet weak var tableView: UITableView!
     @IBOutlet weak var progressView: UIProgressView!
 
     public var accounts: [tableAccount] = []
-    public var activeAccount: tableAccount?
+    public var activeAccount: String?
     public let heightCell: CGFloat = 60
     public var enableTimerProgress: Bool = true
     public var enableAddAccount: Bool = false
     public var dismissDidEnterBackground: Bool = false
+    public var controller: UIViewController?
     public weak var delegate: NCAccountRequestDelegate?
-
+    let utility = NCUtility()
     private var timer: Timer?
     private var time: Float = 0
     private let secondsAutoDismiss: Float = 3
@@ -60,14 +53,11 @@ class NCAccountRequest: UIViewController {
         super.viewDidLoad()
 
         titleLabel.text = NSLocalizedString("_account_select_", comment: "")
-
-        closeButton.setImage(NCUtility.shared.loadImage(named: "xmark", color: NCBrandColor.shared.label), for: .normal)
-
         tableView.tableFooterView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.frame.size.width, height: 1))
         tableView.separatorStyle = UITableViewCell.SeparatorStyle.none
 
-        view.backgroundColor = NCBrandColor.shared.secondarySystemBackground
-        tableView.backgroundColor = NCBrandColor.shared.secondarySystemBackground
+        view.backgroundColor = .secondarySystemBackground
+        tableView.backgroundColor = .secondarySystemBackground
 
         progressView.trackTintColor = .clear
         progressView.progress = 1
@@ -77,12 +67,8 @@ class NCAccountRequest: UIViewController {
             progressView.isHidden = true
         }
 
-        NotificationCenter.default.addObserver(self, selector: #selector(startTimer), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterApplicationDidBecomeActive), object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterApplicationDidEnterBackground), object: nil)
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
+        NotificationCenter.default.addObserver(self, selector: #selector(startTimer), name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -91,28 +77,20 @@ class NCAccountRequest: UIViewController {
         let visibleCells = tableView.visibleCells
         var numAccounts = accounts.count
         if enableAddAccount { numAccounts += 1 }
-
         if visibleCells.count == numAccounts {
             tableView.isScrollEnabled = false
         }
     }
 
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
 
         timer?.invalidate()
-    }
-
-    // MARK: - Action
-
-    @IBAction func actionClose(_ sender: UIButton) {
-        dismiss(animated: true)
     }
 
     // MARK: - NotificationCenter
 
     @objc func applicationDidEnterBackground() {
-
         if dismissDidEnterBackground {
             dismiss(animated: false)
         }
@@ -121,19 +99,17 @@ class NCAccountRequest: UIViewController {
     // MARK: - Progress
 
     @objc func startTimer() {
-
         if enableTimerProgress {
             time = 0
             timer?.invalidate()
             timer = Timer.scheduledTimer(timeInterval: 0.1, target: self, selector: #selector(updateProgress), userInfo: nil, repeats: true)
-            progressView.isHidden = false
+            progressView?.isHidden = false
         } else {
-            progressView.isHidden = true
+            progressView?.isHidden = true
         }
     }
 
     @objc func updateProgress() {
-
         time += 0.1
         if time >= secondsAutoDismiss {
             dismiss(animated: true)
@@ -144,21 +120,9 @@ class NCAccountRequest: UIViewController {
 }
 
 extension NCAccountRequest: UITableViewDelegate {
-
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-
         timer?.invalidate()
         progressView.progress = 0
-    }
-
-    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if decelerate {
-//            startTimer()
-        }
-    }
-
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-//        startTimer()
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
@@ -166,18 +130,14 @@ extension NCAccountRequest: UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-
         if indexPath.row == accounts.count {
-
             dismiss(animated: true)
             delegate?.accountRequestAddAccount()
-
         } else {
-
             let account = accounts[indexPath.row]
-            if account.account != activeAccount?.account {
+            if account.account != activeAccount {
                 dismiss(animated: true) {
-                    self.delegate?.accountRequestChangeAccount(account: account.account)
+                    self.delegate?.accountRequestChangeAccount(account: account.account, controller: self.controller)
                 }
             } else {
                 dismiss(animated: true)
@@ -187,7 +147,6 @@ extension NCAccountRequest: UITableViewDelegate {
 }
 
 extension NCAccountRequest: UITableViewDataSource {
-
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if enableAddAccount {
             return accounts.count + 1
@@ -197,10 +156,8 @@ extension NCAccountRequest: UITableViewDataSource {
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-
         let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
         cell.backgroundColor = tableView.backgroundColor
-
         let avatarImage = cell.viewWithTag(10) as? UIImageView
         let userLabel = cell.viewWithTag(20) as? UILabel
         let urlLabel = cell.viewWithTag(30) as? UILabel
@@ -211,7 +168,7 @@ extension NCAccountRequest: UITableViewDataSource {
 
         if indexPath.row == accounts.count {
 
-            avatarImage?.image = NCUtility.shared.loadImage(named: "plus").image(color: .systemBlue, size: 15)
+            avatarImage?.image = utility.loadImage(named: "plus", colors: [.systemBlue])
             avatarImage?.contentMode = .center
             userLabel?.text = NSLocalizedString("_add_account_", comment: "")
             userLabel?.textColor = .systemBlue
@@ -221,10 +178,7 @@ extension NCAccountRequest: UITableViewDataSource {
 
             let account = accounts[indexPath.row]
 
-            avatarImage?.image = NCUtility.shared.loadUserImage(
-                for: account.user,
-                   displayName: account.displayName,
-                   userBaseUrl: account)
+            avatarImage?.image = utility.loadUserImage(for: account.user, displayName: account.displayName, urlBase: account.urlBase)
 
             if account.alias.isEmpty {
                 userLabel?.text = account.user.uppercased()
@@ -234,7 +188,7 @@ extension NCAccountRequest: UITableViewDataSource {
             }
 
             if account.active {
-                activeImage?.image = NCUtility.shared.loadImage(named: "checkmark").image(color: .systemBlue, size: 30)
+                activeImage?.image = utility.loadImage(named: "checkmark", colors: [.systemBlue])
             } else {
                 activeImage?.image = nil
             }

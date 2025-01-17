@@ -22,11 +22,9 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
 class NCRecent: NCCollectionViewCommon {
-
-    // MARK: - View Life Cycle
 
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
@@ -34,39 +32,45 @@ class NCRecent: NCCollectionViewCommon {
         titleCurrentFolder = NSLocalizedString("_recent_", comment: "")
         layoutKey = NCGlobal.shared.layoutViewRecent
         enableSearchBar = false
-        headerMenuButtonsCommand = false
-        headerMenuButtonsView = false
         headerRichWorkspaceDisable = true
-        emptyImage = UIImage(named: "recent")?.image(color: .gray, size: UIScreen.main.bounds.width)
+        emptyImageName = "clock.arrow.circlepath"
         emptyTitle = "_files_no_files_"
         emptyDescription = ""
     }
 
-    // MARK: - DataSource + NC Endpoint
+    // MARK: - View Life Cycle
 
-    override func reloadDataSource(forced: Bool = true) {
-        super.reloadDataSource()
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
 
-        DispatchQueue.global().async {
-            let metadatas = NCManageDatabase.shared.getAdvancedMetadatas(predicate: NSPredicate(format: "account == %@", self.appDelegate.account), page: 1, limit: 100, sorted: "date", ascending: false)
-            self.dataSource = NCDataSource(metadatas: metadatas,
-                                           account: self.appDelegate.account,
-                                           directoryOnTop: false,
-                                           favoriteOnTop: false,
-                                           groupByField: self.groupByField,
-                                           providers: self.providers,
-                                           searchResults: self.searchResults)
-
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
-                self.collectionView.reloadData()
-            }
-        }
+        reloadDataSource()
     }
 
-    override func reloadDataSourceNetwork(forced: Bool = false) {
-        super.reloadDataSourceNetwork(forced: forced)
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
 
+        getServerData()
+    }
+
+    // MARK: - DataSource
+
+    override func reloadDataSource() {
+        var metadatas: [tableMetadata] = []
+
+        if let results = self.database.getResultsMetadatas(predicate: NSPredicate(format: "account == %@ AND fileName != '.'", session.account), sortedByKeyPath: "date", ascending: false) {
+            metadatas = Array(results.freeze())
+        }
+
+        layoutForView?.sort = "date"
+        layoutForView?.ascending = false
+        layoutForView?.directoryOnTop = false
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView)
+
+        super.reloadDataSource()
+    }
+
+    override func getServerData() {
         let requestBodyRecent =
         """
         <?xml version=\"1.0\"?>
@@ -117,7 +121,7 @@ class NCRecent: NCCollectionViewCommon {
         <d:orderby>
             <d:order>
                 <d:prop>
-                    <d:getlastmodified/>
+        /Users/marinofaggiana/Developer/ios/iOSClient/Assistant                 <d:getlastmodified/>
                 </d:prop>
                 <d:descending/>
             </d:order>
@@ -133,36 +137,25 @@ class NCRecent: NCCollectionViewCommon {
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
         let lessDateString = dateFormatter.string(from: Date())
-        let requestBody = String(format: requestBodyRecent, "/files/"+appDelegate.userId, lessDateString)
+        let requestBody = String(format: requestBodyRecent, "/files/" + session.userId, lessDateString)
 
-        isReloadDataSourceNetworkInProgress = true
-        collectionView?.reloadData()
-
-        NCCommunication.shared.searchBodyRequest(serverUrl: appDelegate.urlBase, requestBody: requestBody, showHiddenFiles: CCUtility.getShowHiddenFiles(), queue: NCCommunicationCommon.shared.backgroundQueue) { account, files, errorCode, _ in
-
-            if errorCode == 0 {
-                NCManageDatabase.shared.convertNCCommunicationFilesToMetadatas(files, useMetadataFolder: false, account: account) { _, metadatasFolder, metadatas in
-
-                    // Update sub directories
-                    for metadata in metadatasFolder {
-                        let serverUrl = metadata.serverUrl + "/" + metadata.fileName
-                        NCManageDatabase.shared.addDirectory(encrypted: metadata.e2eEncrypted, favorite: metadata.favorite, ocId: metadata.ocId, fileId: metadata.fileId, etag: nil, permissions: metadata.permissions, serverUrl: serverUrl, account: account)
-                    }
+        NextcloudKit.shared.searchBodyRequest(serverUrl: session.urlBase,
+                                              requestBody: requestBody,
+                                              showHiddenFiles: NCKeychain().showHiddenFiles,
+                                              account: session.account) { task in
+            self.dataSourceTask = task
+            if self.dataSource.isEmpty() {
+                self.collectionView.reloadData()
+            }
+        } completion: { _, files, _, error in
+            if error == .success, let files {
+                self.database.convertFilesToMetadatas(files, useFirstAsMetadataFolder: false) { _, metadatas in
                     // Add metadatas
-                    NCManageDatabase.shared.addMetadatas(metadatas)
-
+                    self.database.addMetadatas(metadatas)
                     self.reloadDataSource()
                 }
-            } else {
-                DispatchQueue.main.async {
-                    self.collectionView?.reloadData()
-                }
             }
-
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
-                self.isReloadDataSourceNetworkInProgress = false
-            }
+            self.refreshControl.endRefreshing()
         }
     }
 }

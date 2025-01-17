@@ -2,7 +2,7 @@
 //  NCManageDatabase+Activity.swift
 //  Nextcloud
 //
-//  Created by Henrik Storch on 30.11.21.
+//  Created by Marino Faggiana on 13/11/23.
 //  Copyright © 2021 Marino Faggiana. All rights reserved.
 //
 //  Author Marino Faggiana <marino.faggiana@nextcloud.com>
@@ -22,34 +22,102 @@
 //
 
 import Foundation
+import UIKit
 import RealmSwift
-import NCCommunication
+import NextcloudKit
 import SwiftyJSON
 
+class tableActivity: Object, DateCompareable {
+    var dateKey: Date { date as Date }
+
+    @objc dynamic var account = ""
+    @objc dynamic var idPrimaryKey = ""
+    @objc dynamic var action = "Activity"
+    @objc dynamic var date = NSDate()
+    @objc dynamic var idActivity: Int = 0
+    @objc dynamic var app = ""
+    @objc dynamic var type = ""
+    @objc dynamic var user = ""
+    @objc dynamic var subject = ""
+    @objc dynamic var subjectRich = ""
+    let subjectRichItem = List<tableActivitySubjectRich>()
+    @objc dynamic var icon = ""
+    @objc dynamic var link = ""
+    @objc dynamic var message = ""
+    @objc dynamic var objectType = ""
+    @objc dynamic var objectId: Int = 0
+    @objc dynamic var objectName = ""
+    @objc dynamic var note = ""
+    @objc dynamic var selector = ""
+    @objc dynamic var verbose: Bool = false
+
+    override static func primaryKey() -> String {
+        return "idPrimaryKey"
+    }
+}
+
+class tableActivityLatestId: Object {
+    @objc dynamic var account = ""
+    @objc dynamic var activityFirstKnown: Int = 0
+    @objc dynamic var activityLastGiven: Int = 0
+
+    override static func primaryKey() -> String {
+        return "account"
+    }
+}
+
+class tableActivityPreview: Object {
+    @objc dynamic var account = ""
+    @objc dynamic var filename = ""
+    @objc dynamic var idPrimaryKey = ""
+    @objc dynamic var idActivity: Int = 0
+    @objc dynamic var source = ""
+    @objc dynamic var link = ""
+    @objc dynamic var mimeType = ""
+    @objc dynamic var fileId: Int = 0
+    @objc dynamic var view = ""
+    @objc dynamic var isMimeTypeIcon: Bool = false
+
+    override static func primaryKey() -> String {
+        return "idPrimaryKey"
+    }
+}
+
+class tableActivitySubjectRich: Object {
+    @objc dynamic var account = ""
+    @objc dynamic var idActivity: Int = 0
+    @objc dynamic var idPrimaryKey = ""
+    @objc dynamic var id = ""
+    @objc dynamic var key = ""
+    @objc dynamic var link = ""
+    @objc dynamic var name = ""
+    @objc dynamic var path = ""
+    @objc dynamic var type = ""
+
+    override static func primaryKey() -> String {
+        return "idPrimaryKey"
+    }
+}
+
 extension NCManageDatabase {
-    
-    @objc func addActivity(_ activities: [NCCommunicationActivity], account: String) {
-
-        let realm = try! Realm()
-
+    func addActivity(_ activities: [NKActivity], account: String) {
         do {
+            let realm = try Realm()
             try realm.write {
-
                 for activity in activities {
-
                     let addObjectActivity = tableActivity()
 
                     addObjectActivity.account = account
                     addObjectActivity.idActivity = activity.idActivity
                     addObjectActivity.idPrimaryKey = account + String(activity.idActivity)
-                    addObjectActivity.date = activity.date
+                    addObjectActivity.date = activity.date as NSDate
                     addObjectActivity.app = activity.app
                     addObjectActivity.type = activity.type
                     addObjectActivity.user = activity.user
                     addObjectActivity.subject = activity.subject
 
-                    if let subject_rich = activity.subject_rich,
-                       let json = JSON(subject_rich).array {
+                    if let subjectRich = activity.subjectRich,
+                       let json = JSON(subjectRich).array {
 
                         addObjectActivity.subjectRich = json[0].stringValue
                         if json.count > 1,
@@ -106,78 +174,89 @@ extension NCManageDatabase {
                     addObjectActivity.icon = activity.icon
                     addObjectActivity.link = activity.link
                     addObjectActivity.message = activity.message
-                    addObjectActivity.objectType = activity.object_type
-                    addObjectActivity.objectId = activity.object_id
-                    addObjectActivity.objectName = activity.object_name
+                    addObjectActivity.objectType = activity.objectType
+                    addObjectActivity.objectId = activity.objectId
+                    addObjectActivity.objectName = activity.objectName
 
                     realm.add(addObjectActivity, update: .all)
                 }
             }
         } catch let error {
-            NCCommunicationCommon.shared.writeLog("Could not write to database: \(error)")
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not write to database: \(error)")
         }
     }
 
     func getActivity(predicate: NSPredicate, filterFileId: String?) -> (all: [tableActivity], filter: [tableActivity]) {
-
-        let realm = try! Realm()
-
-        let results = realm.objects(tableActivity.self).filter(predicate).sorted(byKeyPath: "idActivity", ascending: false)
-        let allActivity = Array(results.map(tableActivity.init))
-        guard let filterFileId = filterFileId else {
-            return (all: allActivity, filter: allActivity)
+        do {
+            let realm = try Realm()
+            realm.refresh()
+            let results = realm.objects(tableActivity.self).filter(predicate).sorted(byKeyPath: "idActivity", ascending: false)
+            let allActivity = Array(results.map(tableActivity.init))
+            guard let filterFileId = filterFileId else {
+                return (all: allActivity, filter: allActivity)
+            }
+            // comments are loaded seperately, see NCManageDatabase.getComments
+            let filtered = allActivity.filter({ String($0.objectId) == filterFileId && $0.type != "comments" })
+            return (all: allActivity, filter: filtered)
+        } catch let error as NSError {
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not access database: \(error)")
         }
-
-        // comments are loaded seperately, see NCManageDatabase.getComments
-        let filtered = allActivity.filter({ String($0.objectId) == filterFileId && $0.type != "comments" })
-        return (all: allActivity, filter: filtered)
+        return([], [])
     }
 
-    @objc func getActivitySubjectRich(account: String, idActivity: Int, key: String) -> tableActivitySubjectRich? {
-
-        let realm = try! Realm()
-
-        let results = realm.objects(tableActivitySubjectRich.self).filter("account == %@ && idActivity == %d && key == %@", account, idActivity, key).first
-
-        return results.map { tableActivitySubjectRich.init(value: $0) }
+    func getActivitySubjectRich(account: String, idActivity: Int, key: String) -> tableActivitySubjectRich? {
+        do {
+            let realm = try Realm()
+            realm.refresh()
+            let results = realm.objects(tableActivitySubjectRich.self).filter("account == %@ && idActivity == %d && key == %@", account, idActivity, key).first
+            return results.map { tableActivitySubjectRich.init(value: $0) }
+        } catch let error as NSError {
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not access database: \(error)")
+        }
+        return nil
     }
 
-    @objc func getActivitySubjectRich(account: String, idActivity: Int, id: String) -> tableActivitySubjectRich? {
-
-        let realm = try! Realm()
-
-        let results = realm.objects(tableActivitySubjectRich.self).filter("account == %@ && idActivity == %d && id == %@", account, idActivity, id)
-        var activitySubjectRich = results.first
-        if results.count == 2 {
-            for result in results {
-                if result.key == "newfile" {
-                    activitySubjectRich = result
+    func getActivitySubjectRich(account: String, idActivity: Int, id: String) -> tableActivitySubjectRich? {
+        do {
+            let realm = try Realm()
+            realm.refresh()
+            let results = realm.objects(tableActivitySubjectRich.self).filter("account == %@ && idActivity == %d && id == %@", account, idActivity, id)
+            var activitySubjectRich = results.first
+            if results.count == 2 {
+                for result in results {
+                    if result.key == "newfile" {
+                        activitySubjectRich = result
+                    }
                 }
             }
+            return activitySubjectRich.map { tableActivitySubjectRich.init(value: $0) }
+        } catch let error as NSError {
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not access database: \(error)")
         }
-
-        return activitySubjectRich.map { tableActivitySubjectRich.init(value: $0) }
+        return nil
     }
 
-    @objc func getActivityPreview(account: String, idActivity: Int, orderKeysId: [String]) -> [tableActivityPreview] {
-
-        let realm = try! Realm()
-
+    func getActivityPreview(account: String, idActivity: Int, orderKeysId: [String]) -> [tableActivityPreview] {
         var results: [tableActivityPreview] = []
 
-        for id in orderKeysId {
-            if let result = realm.objects(tableActivityPreview.self).filter("account == %@ && idActivity == %d && fileId == %d", account, idActivity, Int(id) ?? 0).first {
-                results.append(result)
+        do {
+            let realm = try Realm()
+            realm.refresh()
+            for id in orderKeysId {
+                if let result = realm.objects(tableActivityPreview.self).filter("account == %@ && idActivity == %d && fileId == %d", account, idActivity, Int(id) ?? 0).first {
+                    results.append(result)
+                }
             }
+            return results
+        } catch let error as NSError {
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not access database: \(error)")
         }
-
-        return results
+        return []
     }
 
    func updateLatestActivityId(activityFirstKnown: Int, activityLastGiven: Int, account: String) {
-        let realm = try! Realm()
-
         do {
+            let realm = try Realm()
             try realm.write {
                 let newRecentActivity = tableActivityLatestId()
                 newRecentActivity.activityFirstKnown = activityFirstKnown
@@ -186,60 +265,18 @@ extension NCManageDatabase {
                 realm.add(newRecentActivity, update: .all)
             }
         } catch {
-            NCCommunicationCommon.shared.writeLog("Could not write to database: \(error)")
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not write to database: \(error)")
         }
     }
 
     func getLatestActivityId(account: String) -> tableActivityLatestId? {
-
-        let realm = try! Realm()
-        return realm.objects(tableActivityLatestId.self).filter("account == %@", account).first
-    }
-    
-    // MARK: -
-    // MARK: Table Comments
-
-    @objc func addComments(_ comments: [NCCommunicationComments], account: String, objectId: String) {
-
-        let realm = try! Realm()
-
         do {
-            try realm.safeWrite {
-
-                let results = realm.objects(tableComments.self).filter("account == %@ AND objectId == %@", account, objectId)
-                realm.delete(results)
-
-                for comment in comments {
-
-                    let object = tableComments()
-
-                    object.account = account
-                    object.actorDisplayName = comment.actorDisplayName
-                    object.actorId = comment.actorId
-                    object.actorType = comment.actorType
-                    object.creationDateTime = comment.creationDateTime as NSDate
-                    object.isUnread = comment.isUnread
-                    object.message = comment.message
-                    object.messageId = comment.messageId
-                    object.objectId = comment.objectId
-                    object.objectType = comment.objectType
-                    object.path = comment.path
-                    object.verb = comment.verb
-
-                    realm.add(object, update: .all)
-                }
-            }
-        } catch let error {
-            NCCommunicationCommon.shared.writeLog("Could not write to database: \(error)")
+            let realm = try Realm()
+            realm.refresh()
+            return realm.objects(tableActivityLatestId.self).filter("account == %@", account).first
+        } catch let error as NSError {
+            NextcloudKit.shared.nkCommonInstance.writeLog("[ERROR] Could not access database: \(error)")
         }
-    }
-
-    @objc func getComments(account: String, objectId: String) -> [tableComments] {
-
-        let realm = try! Realm()
-
-        let results = realm.objects(tableComments.self).filter("account == %@ AND objectId == %@", account, objectId).sorted(byKeyPath: "creationDateTime", ascending: false)
-
-        return Array(results.map(tableComments.init))
+        return nil
     }
 }

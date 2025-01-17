@@ -22,7 +22,7 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 import SVGKit
 import CloudKit
 
@@ -45,10 +45,24 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
             self.present(alert, animated: true)
             return
         }
-        if isNewShare {
-            networking?.createShare(option: share)
-        } else {
-            networking?.updateShare(option: share)
+        Task {
+            if isNewShare {
+                let serverUrl = metadata.serverUrl + "/" + metadata.fileName
+                if share.shareType != NCShareCommon().SHARE_TYPE_LINK, metadata.e2eEncrypted,
+                   NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityE2EEApiVersion == NCGlobal.shared.e2eeVersionV20 {
+                    if NCNetworkingE2EE().isInUpload(account: metadata.account, serverUrl: serverUrl) {
+                        let error = NKError(errorCode: NCGlobal.shared.errorE2EEUploadInProgress, errorDescription: NSLocalizedString("_e2e_in_upload_", comment: ""))
+                        return NCContentPresenter().showInfo(error: error)
+                    }
+                    let error = await NCNetworkingE2EE().uploadMetadata(serverUrl: serverUrl, addUserId: share.shareWith, removeUserId: nil, account: metadata.account)
+                    if error != .success {
+                        return NCContentPresenter().showError(error: error)
+                    }
+                }
+                networking?.createShare(option: share)
+            } else {
+                networking?.updateShare(option: share)
+            }
         }
         navigationController?.popViewController(animated: true)
     }
@@ -68,10 +82,8 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
         tableView.rowHeight = UITableView.automaticDimension
         self.setNavigationTitle()
         self.navigationItem.hidesBackButton = true
-        if #available(iOS 13.0, *) {
-            // disbale pull to dimiss
-            isModalInPresentation = true
-        }
+        // disbale pull to dimiss
+        isModalInPresentation = true
     }
 
     override func viewWillLayoutSubviews() {
@@ -83,7 +95,7 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
 
     func setupFooterView() {
         guard let footerView = (Bundle.main.loadNibNamed("NCShareAdvancePermissionFooter", owner: self, options: nil)?.first as? NCShareAdvancePermissionFooter) else { return }
-        footerView.setupUI(delegate: self)
+        footerView.setupUI(delegate: self, account: metadata.account)
 
         // tableFooterView can't use auto layout directly
         let container = UIView(frame: CGRect(x: 0, y: 0, width: view.frame.width, height: 120))
@@ -96,7 +108,7 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
     }
 
     func setupHeaderView() {
-        guard let headerView = (Bundle.main.loadNibNamed("NCShareAdvancePermissionHeader", owner: self, options: nil)?.first as? NCShareAdvancePermissionHeader) else { return }
+        guard let headerView = (Bundle.main.loadNibNamed("NCShareHeader", owner: self, options: nil)?.first as? NCShareHeader) else { return }
         headerView.setupUI(with: metadata)
 
         let container = UIView(frame: CGRect(x: 0, y: 0, width: view.frame.width, height: 220))
@@ -123,7 +135,7 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if section == 0 {
             // check reshare permission, if restricted add note
-            let maxPermission = metadata.directory ? NCGlobal.shared.permissionMaxFolderShare : NCGlobal.shared.permissionMaxFileShare
+            let maxPermission = metadata.directory ? NCPermissions().permissionMaxFolderShare : NCPermissions().permissionMaxFileShare
             return shareConfig.resharePermission != maxPermission ? shareConfig.permissions.count + 1 : shareConfig.permissions.count
         } else if section == 1 {
             return shareConfig.advanced.count
@@ -159,6 +171,7 @@ class NCShareAdvancePermission: UITableViewController, NCShareAdvanceFotterDeleg
         case .expirationDate:
             let cell = tableView.cellForRow(at: indexPath) as? NCShareDateCell
             cell?.textField.becomeFirstResponder()
+            cell?.checkMaximumDate(account: metadata.account)
         case .password:
             guard share.password.isEmpty else {
                 share.password = ""

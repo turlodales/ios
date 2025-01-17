@@ -34,11 +34,11 @@ class NCActivityIndicator: NSObject {
     private var viewActivityIndicator: UIView?
     private var viewBackgroundActivityIndicator: UIView?
 
-    @objc func startActivity(backgroundView: UIView?, style: UIActivityIndicatorView.Style) {
-        start(backgroundView: backgroundView, style: style)
+    @objc func startActivity(backgroundView: UIView? = nil, style: UIActivityIndicatorView.Style, blurEffect: Bool = true) {
+        start(backgroundView: backgroundView, style: style, blurEffect: blurEffect)
     }
 
-    func start(backgroundView: UIView? = nil, bottom: CGFloat? = nil, top: CGFloat? = nil, style: UIActivityIndicatorView.Style = .whiteLarge) {
+    func start(backgroundView: UIView? = nil, bottom: CGFloat? = nil, top: CGFloat? = nil, style: UIActivityIndicatorView.Style = .large, blurEffect: Bool = true) {
 
         if self.activityIndicator != nil { stop() }
 
@@ -47,7 +47,7 @@ class NCActivityIndicator: NSObject {
             self.activityIndicator = UIActivityIndicatorView(style: style)
             guard let activityIndicator = self.activityIndicator, self.viewBackgroundActivityIndicator == nil else { return }
 
-            activityIndicator.color = NCBrandColor.shared.label
+            activityIndicator.color = NCBrandColor.shared.textColor
             activityIndicator.hidesWhenStopped = true
             activityIndicator.translatesAutoresizingMaskIntoConstraints = false
 
@@ -62,9 +62,9 @@ class NCActivityIndicator: NSObject {
             self.viewActivityIndicator?.layer.masksToBounds = true
             self.viewActivityIndicator?.backgroundColor = .clear
 
-            #if !EXTENSION
+#if !EXTENSION
             if backgroundView == nil {
-                if let window = UIApplication.shared.keyWindow {
+                if let window = (UIApplication.shared.connectedScenes.flatMap { ($0 as? UIWindowScene)?.windows ?? [] }.first { $0.isKeyWindow }) {
                     self.viewBackgroundActivityIndicator?.removeFromSuperview()
                     self.viewBackgroundActivityIndicator = NCViewActivityIndicator(frame: window.bounds)
                     window.addSubview(self.viewBackgroundActivityIndicator!)
@@ -74,16 +74,16 @@ class NCActivityIndicator: NSObject {
             } else {
                 self.viewBackgroundActivityIndicator = backgroundView
             }
-            #else
+#else
             self.viewBackgroundActivityIndicator = backgroundView
-            #endif
+#endif
 
             // VIEW ACTIVITY INDICATOR
 
             guard let viewActivityIndicator = self.viewActivityIndicator else { return }
             viewActivityIndicator.addSubview(activityIndicator)
 
-            if backgroundView == nil {
+            if backgroundView == nil, blurEffect {
                 let blurEffect = UIBlurEffect(style: .regular)
                 let blurEffectView = UIVisualEffectView(effect: blurEffect)
                 blurEffectView.frame = viewActivityIndicator.frame
@@ -117,7 +117,7 @@ class NCActivityIndicator: NSObject {
 
     @objc func stop() {
 
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
 
             self.activityIndicator?.stopAnimating()
             self.activityIndicator?.removeFromSuperview()

@@ -3,9 +3,7 @@
 //  Nextcloud
 //
 //  Created by TSI-mc on 21/06/21.
-//  Copyright © 2022 Henrik Storch. All rights reserved.
-//
-//  Author Henrik Storch <henrik.storch@nextcloud.com>
+//  Copyright © 2022 All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
@@ -22,8 +20,7 @@
 //
 
 import UIKit
-import NCCommunication
-import SVGKit
+import NextcloudKit
 
 class NCShareNewUserAddComment: UIViewController, NCShareDetail {
 
@@ -52,14 +49,15 @@ class NCShareNewUserAddComment: UIViewController, NCShareDetail {
             self.noteTextField.resignFirstResponder()
             self.noteTextField.text = ""
             self.share.note = ""
-        } completion: {
+        } onDone: {
             self.noteTextField.resignFirstResponder()
             self.share.note = self.noteTextField.text
+            self.navigationController?.popViewController(animated: true)
         }
 
         noteTextField.inputAccessoryView = toolbar.wrappedSafeAreaContainer
 
-        guard let headerView = (Bundle.main.loadNibNamed("NCShareAdvancePermissionHeader", owner: self, options: nil)?.first as? NCShareAdvancePermissionHeader) else { return }
+        guard let headerView = (Bundle.main.loadNibNamed("NCShareHeader", owner: self, options: nil)?.first as? NCShareHeader) else { return }
         headerContainerView.addSubview(headerView)
         headerView.frame = headerContainerView.frame
         headerView.translatesAutoresizingMaskIntoConstraints = false

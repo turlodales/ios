@@ -35,10 +35,14 @@ extension Array where Element == NCMenuAction {
 class NCMenu: UITableViewController {
 
     var actions = [NCMenuAction]()
+    var menuColor = UIColor.systemBackground
+    var textColor = NCBrandColor.shared.textColor
 
-    static func makeNCMenu(with actions: [NCMenuAction]) -> NCMenu? {
+    static func makeNCMenu(with actions: [NCMenuAction], menuColor: UIColor, textColor: UIColor) -> NCMenu? {
         let menuViewController = UIStoryboard(name: "NCMenu", bundle: nil).instantiateInitialViewController() as? NCMenu
         menuViewController?.actions = actions
+        menuViewController?.menuColor = menuColor
+        menuViewController?.textColor = textColor
         return menuViewController
     }
 
@@ -46,8 +50,10 @@ class NCMenu: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        tableView.contentInset.top = 10
         tableView.estimatedRowHeight = 60
         tableView.rowHeight = UITableView.automaticDimension
+        self.view.backgroundColor = menuColor
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -72,11 +78,12 @@ class NCMenu: UITableViewController {
         let action = actions[indexPath.row]
         guard action.title != NCMenuAction.seperatorIdentifier else {
             let cell = UITableViewCell()
-            cell.backgroundColor = NCBrandColor.shared.separator
+            cell.backgroundColor = .separator
             return cell
         }
         let cell = tableView.dequeueReusableCell(withIdentifier: "menuActionCell", for: indexPath)
         cell.tintColor = NCBrandColor.shared.customer
+        cell.backgroundColor = menuColor
         let actionIconView = cell.viewWithTag(1) as? UIImageView
         let actionNameLabel = cell.viewWithTag(2) as? UILabel
         let actionDetailLabel = cell.viewWithTag(3) as? UILabel
@@ -86,15 +93,31 @@ class NCMenu: UITableViewController {
         }
         if let details = action.details {
             actionDetailLabel?.text = details
+            actionDetailLabel?.textColor = textColor
             actionNameLabel?.isHidden = false
         } else { actionDetailLabel?.isHidden = true }
 
         if action.isOn {
             actionIconView?.image = action.onIcon
             actionNameLabel?.text = action.onTitle
+            actionNameLabel?.textColor = textColor
         } else {
             actionIconView?.image = action.icon
             actionNameLabel?.text = action.title
+            actionNameLabel?.textColor = textColor
+            actionNameLabel?.lineBreakMode = .byTruncatingMiddle
+
+            if action.boldTitle {
+                actionNameLabel?.font = .systemFont(ofSize: 18, weight: .medium)
+            } else {
+                actionNameLabel?.font = .systemFont(ofSize: 18, weight: .regular)
+            }
+        }
+
+        if action.destructive {
+            actionIconView?.image = actionIconView?.image?.withRenderingMode(.alwaysTemplate)
+            actionIconView?.tintColor = .red
+            actionNameLabel?.textColor = .red
         }
 
         cell.accessoryType = action.selectable && action.selected ? .checkmark : .none

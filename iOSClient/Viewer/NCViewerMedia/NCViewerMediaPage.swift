@@ -22,19 +22,51 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 import MediaPlayer
+import Alamofire
+
+enum ScreenMode {
+    case full, normal
+}
+
+var viewerMediaScreenMode: ScreenMode = .normal
 
 class NCViewerMediaPage: UIViewController {
-
     @IBOutlet weak var progressView: UIProgressView!
 
-    enum ScreenMode {
-        case full, normal
-    }
-    var currentScreenMode: ScreenMode = .normal
-    var saveScreenModeImage: ScreenMode = .normal
+    /// Parameters
+    var ocIds: [String] = []
+    var currentIndex: Int = 0
+    var delegateViewController: UIViewController?
 
+    ///
+    var modifiedOcId: [String] = []
+    var nextIndex: Int?
+    var panGestureRecognizer: UIPanGestureRecognizer!
+    var singleTapGestureRecognizer: UITapGestureRecognizer!
+    var longtapGestureRecognizer: UILongPressGestureRecognizer!
+    var textColor: UIColor = NCBrandColor.shared.textColor
+    var playCommand: Any?
+    var pauseCommand: Any?
+    var skipForwardCommand: Any?
+    var skipBackwardCommand: Any?
+    var nextTrackCommand: Any?
+    var previousTrackCommand: Any?
+    let utilityFileSystem = NCUtilityFileSystem()
+    let database = NCManageDatabase.shared
+
+    // This prevents the scroll views to scroll when you drag and drop files/images/subjects (from this or other apps)
+    // https://forums.developer.apple.com/forums/thread/89396 and https://forums.developer.apple.com/forums/thread/115736
+    var preventScrollOnDragAndDrop = true
+
+    var timerAutoHide: Timer?
+    private var timerAutoHideSeconds: Double = 4
+
+    private lazy var moreNavigationItem = UIBarButtonItem(image: NCImageCache.shared.getImageButtonMore(), style: .plain, target: self, action: #selector(openMenuMore))
+    private lazy var imageDetailNavigationItem = UIBarButtonItem(image: NCUtility().loadImage(named: "info.circle", colors: [NCBrandColor.shared.iconImageColor]), style: .plain, target: self, action: #selector(toggleDetail))
+
+    // swiftlint:disable force_cast
     var pageViewController: UIPageViewController {
         return self.children[0] as! UIPageViewController
     }
@@ -42,29 +74,33 @@ class NCViewerMediaPage: UIViewController {
     var currentViewController: NCViewerMedia {
         return self.pageViewController.viewControllers![0] as! NCViewerMedia
     }
+    // swiftlint:enable force_cast
 
-    var metadatas: [tableMetadata] = []
-    var modifiedOcId: [String] = []
-    var currentIndex = 0
-    var nextIndex: Int?
-    var ncplayerLivePhoto: NCPlayer?
-    var panGestureRecognizer: UIPanGestureRecognizer!
-    var singleTapGestureRecognizer: UITapGestureRecognizer!
-    var longtapGestureRecognizer: UILongPressGestureRecognizer!
-    var textColor: UIColor = NCBrandColor.shared.label
-    var playCommand: Any?
-    var pauseCommand: Any?
-    var skipForwardCommand: Any?
-    var skipBackwardCommand: Any?
-    var nextTrackCommand: Any?
-    var previousTrackCommand: Any?
+    private var hideStatusBar: Bool = false {
+        didSet {
+            setNeedsStatusBarAppearanceUpdate()
+        }
+    }
 
     // MARK: - View Life Cycle
+
+    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+
+        viewerMediaScreenMode = .normal
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+
+        viewerMediaScreenMode = .normal
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(named: "more")!.image(color: NCBrandColor.shared.label, size: 25), style: .plain, target: self, action: #selector(self.openMenuMore))
+        navigationController?.navigationBar.tintColor = NCBrandColor.shared.iconImageColor
+        let metadata = database.getMetadataFromOcId(ocIds[currentIndex])!
 
         singleTapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(didSingleTapWith(gestureRecognizer:)))
         panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(didPanWith(gestureRecognizer:)))
@@ -79,19 +115,21 @@ class NCViewerMediaPage: UIViewController {
         pageViewController.view.addGestureRecognizer(panGestureRecognizer)
         pageViewController.view.addGestureRecognizer(singleTapGestureRecognizer)
         pageViewController.view.addGestureRecognizer(longtapGestureRecognizer)
-        
-        let viewerMedia = getViewerMedia(index: currentIndex, metadata: metadatas[currentIndex])
-        pageViewController.setViewControllers([viewerMedia], direction: .forward, animated: true, completion: nil)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(viewUnload), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterMenuDetailClose), object: nil)
-
-        progressView.tintColor = NCBrandColor.shared.brandElement
+        progressView.tintColor = NCBrandColor.shared.getElement(account: metadata.account)
         progressView.trackTintColor = .clear
         progressView.progress = 0
 
+        let viewerMedia = getViewerMedia(index: currentIndex, metadata: metadata)
+        pageViewController.setViewControllers([viewerMedia], direction: .forward, animated: true, completion: nil)
+        changeScreenMode(mode: viewerMediaScreenMode)
+
+        NotificationCenter.default.addObserver(self, selector: #selector(viewUnload), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterChangeUser), object: nil)
+
+        NotificationCenter.default.addObserver(self, selector: #selector(pageViewController.enableSwipeGesture), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterEnableSwipeGesture), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(pageViewController.disableSwipeGesture), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDisableSwipeGesture), object: nil)
+
         NotificationCenter.default.addObserver(self, selector: #selector(deleteFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDeleteFile), object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(renameFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterRenameFile), object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(moveFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterMoveFile), object: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(downloadedFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDownloadedFile), object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(triggerProgressTask(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterProgressTask), object: nil)
@@ -99,19 +137,30 @@ class NCViewerMediaPage: UIViewController {
         NotificationCenter.default.addObserver(self, selector: #selector(uploadStartFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterUploadStartFile), object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(uploadedFile(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterUploadedFile), object: nil)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(hidePlayerToolBar(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterHidePlayerToolBar), object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(showPlayerToolBar(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterShowPlayerToolBar), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive(_:)), name: UIApplication.didBecomeActiveNotification, object: nil)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(reloadMediaPage(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterReloadMediaPage), object: nil)
+        if NCNetworking.shared.isOnline {
+            if currentViewController.metadata.isImage {
+                navigationItem.rightBarButtonItems = [moreNavigationItem, imageDetailNavigationItem]
+            } else {
+                navigationItem.rightBarButtonItems = [moreNavigationItem]
+            }
+        }
 
-        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive(_:)), name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterApplicationDidBecomeActive), object: nil)
+        for view in self.pageViewController.view.subviews {
+            if let scrollView = view as? UIScrollView {
+                scrollView.delegate = self
+            }
+        }
     }
 
     deinit {
+        timerAutoHide?.invalidate()
+
+        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterEnableSwipeGesture), object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDisableSwipeGesture), object: nil)
 
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDeleteFile), object: nil)
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterRenameFile), object: nil)
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterMoveFile), object: nil)
 
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterDownloadedFile), object: nil)
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterProgressTask), object: nil)
@@ -119,28 +168,25 @@ class NCViewerMediaPage: UIViewController {
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterUploadStartFile), object: nil)
         NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterUploadedFile), object: nil)
 
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterHidePlayerToolBar), object: nil)
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterShowPlayerToolBar), object: nil)
+        NotificationCenter.default.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
 
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterReloadMediaPage), object: nil)
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
 
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name(rawValue: NCGlobal.shared.notificationCenterApplicationDidBecomeActive), object: nil)
+        startTimerAutoHide()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
 
-        if let ncplayer = currentViewController.ncplayer, ncplayer.isPlay() {
-            ncplayer.playerPause()
-            ncplayer.saveCurrentTime()
-        }
-        currentViewController.playerToolBar?.stopTimerAutoHide()
+        currentViewController.ncplayer?.playerStop()
+        timerAutoHide?.invalidate()
         clearCommandCenter()
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
-
-        if currentScreenMode == .normal {
+        if viewerMediaScreenMode == .normal {
             return .default
         } else {
             return .lightContent
@@ -148,17 +194,22 @@ class NCViewerMediaPage: UIViewController {
     }
 
     override var prefersHomeIndicatorAutoHidden: Bool {
-        return currentScreenMode == .full
+        return viewerMediaScreenMode == .full
     }
 
-    // MARK: -
-    
+    override var prefersStatusBarHidden: Bool {
+        return hideStatusBar
+    }
+
     func getViewerMedia(index: Int, metadata: tableMetadata) -> NCViewerMedia {
-        
+        // swiftlint:disable force_cast
         let viewerMedia = UIStoryboard(name: "NCViewerMediaPage", bundle: nil).instantiateViewController(withIdentifier: "NCViewerMedia") as! NCViewerMedia
+        // swiftlint:enable force_cast
+
         viewerMedia.index = index
         viewerMedia.metadata = metadata
         viewerMedia.viewerMediaPage = self
+        viewerMedia.delegate = self
 
         singleTapGestureRecognizer.require(toFail: viewerMedia.doubleTapGestureRecognizer)
 
@@ -166,62 +217,139 @@ class NCViewerMediaPage: UIViewController {
     }
 
     @objc func viewUnload() {
-
         navigationController?.popViewController(animated: true)
     }
 
-    @objc func openMenuMore() {
+    @objc private func openMenuMore() {
+        let imageIcon = NCUtility().getImage(ocId: currentViewController.metadata.ocId, etag: currentViewController.metadata.etag, ext: NCGlobal.shared.previewExt512)
 
-        let imageIcon = UIImage(contentsOfFile: CCUtility.getDirectoryProviderStorageIconOcId(currentViewController.metadata.ocId, etag: currentViewController.metadata.etag))
-        NCViewer.shared.toggleMenu(viewController: self, metadata: currentViewController.metadata, webView: false, imageIcon: imageIcon)
+        NCViewer().toggleMenu(controller: self.tabBarController as? NCMainTabBarController, metadata: currentViewController.metadata, webView: false, imageIcon: imageIcon)
     }
 
-    func changeScreenMode(mode: ScreenMode, enableTimerAutoHide: Bool = false) {
+    @objc private func toggleDetail() {
+        currentViewController.toggleDetail()
+    }
+
+    func changeScreenMode(mode: ScreenMode) {
+        let metadata = currentViewController.metadata
+        let fullscreen = currentViewController.playerToolBar?.isFullscreen ?? false
 
         if mode == .normal {
 
-            navigationController?.setNavigationBarHidden(false, animated: true)
-            progressView.isHidden = false
-
-            if !currentViewController.detailView.isShow() {
-                currentViewController.playerToolBar?.show(enableTimerAutoHide: enableTimerAutoHide)
+            if fullscreen {
+                navigationController?.setNavigationBarHidden(true, animated: true)
+                hideStatusBar = true
+                progressView.isHidden = true
+            } else {
+                navigationController?.setNavigationBarHidden(false, animated: true)
+                hideStatusBar = false
+                progressView.isHidden = false
             }
 
-            NCUtility.shared.colorNavigationController(navigationController, backgroundColor: NCBrandColor.shared.systemBackground, titleColor: NCBrandColor.shared.label, tintColor: nil, withoutShadow: false)
-            view.backgroundColor = NCBrandColor.shared.systemBackground
-            textColor = NCBrandColor.shared.label
+            if metadata.isAudioOrVideo {
+                colorNavigationController(backgroundColor: .black, titleColor: NCBrandColor.shared.textColor, tintColor: nil, withoutShadow: false)
+                currentViewController.playerToolBar?.show()
+                view.backgroundColor = .black
+                textColor = .white
+            } else {
+                colorNavigationController(backgroundColor: .systemBackground, titleColor: NCBrandColor.shared.textColor, tintColor: nil, withoutShadow: false)
+                view.backgroundColor = .systemGray6
+                textColor = NCBrandColor.shared.textColor
+            }
 
-        } else {
+        } else if !currentViewController.detailView.isShown {
 
             navigationController?.setNavigationBarHidden(true, animated: true)
+            hideStatusBar = true
             progressView.isHidden = true
 
-            currentViewController.playerToolBar?.hide()
+            if metadata.isVideo {
+                currentViewController.playerToolBar?.hide()
+            }
 
             view.backgroundColor = .black
             textColor = .white
         }
 
-        currentScreenMode = mode
-
-        if currentViewController.metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue {
-            saveScreenModeImage = mode
+        if fullscreen {
+            pageViewController.disableSwipeGesture()
+        } else {
+            pageViewController.enableSwipeGesture()
         }
 
+        viewerMediaScreenMode = mode
+        print("Screen mode: \(viewerMediaScreenMode)")
+
+        startTimerAutoHide()
         setNeedsStatusBarAppearanceUpdate()
         setNeedsUpdateOfHomeIndicatorAutoHidden()
         currentViewController.reloadDetail()
     }
 
+    @objc func startTimerAutoHide() {
+        timerAutoHide?.invalidate()
+        timerAutoHide = Timer.scheduledTimer(timeInterval: timerAutoHideSeconds, target: self, selector: #selector(autoHide), userInfo: nil, repeats: true)
+    }
+
+    @objc func autoHide() {
+        let metadata = currentViewController.metadata
+        if metadata.isVideo, viewerMediaScreenMode == .normal {
+            changeScreenMode(mode: .full)
+        }
+    }
+
+    func colorNavigationController(backgroundColor: UIColor, titleColor: UIColor, tintColor: UIColor?, withoutShadow: Bool) {
+
+        let appearance = UINavigationBarAppearance()
+        appearance.titleTextAttributes = [.foregroundColor: titleColor]
+        appearance.largeTitleTextAttributes = [.foregroundColor: titleColor]
+
+        if withoutShadow {
+            appearance.shadowColor = .clear
+            appearance.shadowImage = UIImage()
+        }
+
+        if let tintColor = tintColor {
+            navigationController?.navigationBar.tintColor = tintColor
+        }
+
+        navigationController?.view.backgroundColor = backgroundColor
+        navigationController?.navigationBar.barTintColor = titleColor
+        navigationController?.navigationBar.standardAppearance = appearance
+        navigationController?.navigationBar.compactAppearance = appearance
+        navigationController?.navigationBar.scrollEdgeAppearance = appearance
+    }
+
     // MARK: - NotificationCenter
 
     @objc func downloadedFile(_ notification: NSNotification) {
+        guard let userInfo = notification.userInfo as NSDictionary?,
+              let ocId = userInfo["ocId"] as? String
+        else {
+            return
+        }
 
-        progressView.progress = 0
+        self.progressView.progress = 0
+        let metadata = self.currentViewController.metadata
+        guard metadata.ocId == ocId, self.utilityFileSystem.fileProviderStorageExists(metadata) else { return }
+
+        if metadata.isAudioOrVideo, let ncplayer = self.currentViewController.ncplayer {
+            let url = URL(fileURLWithPath: self.utilityFileSystem.getDirectoryProviderStorageOcId(metadata.ocId, fileNameView: metadata.fileNameView))
+            if ncplayer.isPlaying() {
+                ncplayer.playerPause()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    ncplayer.openAVPlayer(url: url)
+                    ncplayer.playerPlay()
+                }
+            } else {
+                ncplayer.openAVPlayer(url: url)
+            }
+        } else if metadata.isImage {
+            self.currentViewController.loadImage()
+        }
     }
 
     @objc func triggerProgressTask(_ notification: NSNotification) {
-
         guard let userInfo = notification.userInfo as NSDictionary?,
               let progressNumber = userInfo["progress"] as? NSNumber
         else { return }
@@ -234,122 +362,55 @@ class NCViewerMediaPage: UIViewController {
         }
     }
 
-    @objc func uploadStartFile(_ notification: NSNotification) {
-
-        /*
-        guard let userInfo = notification.userInfo as NSDictionary?,
-              let serverUrl = userInfo["serverUrl"] as? String,
-              let fileName = userInfo["fileName"] as? String,
-              let sessionSelector = userInfo["sessionSelector"] as? String
-        else { return }
-        */
-    }
+    @objc func uploadStartFile(_ notification: NSNotification) { }
 
     @objc func uploadedFile(_ notification: NSNotification) {
-
         guard let userInfo = notification.userInfo as NSDictionary?,
               let ocId = userInfo["ocId"] as? String,
-              let errorCode = userInfo["errorCode"] as? Int,
-              errorCode == 0,
-              let index = metadatas.firstIndex(where: {$0.ocId == ocId}),
-              let metadata = NCManageDatabase.shared.getMetadataFromOcId(ocId)
-        else {
-            return
-        }
+              let error = userInfo["error"] as? NKError,
+              error == .success
+        else { return }
 
-        metadatas[index] = metadata
-        if currentViewController.metadata.ocId == ocId {
-            currentViewController.reloadImage()
+        if self.currentViewController.metadata.ocId == ocId {
+            self.currentViewController.loadImage()
         } else {
-            modifiedOcId.append(ocId)
+            self.modifiedOcId.append(ocId)
         }
     }
 
     @objc func deleteFile(_ notification: NSNotification) {
-
         guard let userInfo = notification.userInfo as NSDictionary?,
-              let ocId = userInfo["ocId"] as? String
-        else { return }
+              let error = userInfo["error"] as? NKError else { return }
 
-        let metadatas = self.metadatas.filter { $0.ocId != ocId }
-        if self.metadatas.count == metadatas.count { return }
-        self.metadatas = metadatas
-
-        if ocId == currentViewController.metadata.ocId {
-            shiftCurrentPage()
+        if error != .success {
+            NCContentPresenter().showError(error: error)
         }
-    }
 
-    @objc func renameFile(_ notification: NSNotification) {
-
-        guard let userInfo = notification.userInfo as NSDictionary?,
-              let ocId = userInfo["ocId"] as? String,
-              let index = metadatas.firstIndex(where: {$0.ocId == ocId}),
-              let metadata = NCManageDatabase.shared.getMetadataFromOcId(ocId)
-        else { return }
-
-        metadatas[index] = metadata
-        if index == currentIndex {
-            navigationItem.title = metadata.fileNameView
-            currentViewController.metadata = metadata
-            self.currentViewController.metadata = metadata
+        if let ncplayer = currentViewController.ncplayer, ncplayer.isPlaying() {
+            ncplayer.playerPause()
         }
+
+        self.viewUnload()
     }
 
-    @objc func moveFile(_ notification: NSNotification) {
-
-        guard let userInfo = notification.userInfo as NSDictionary?,
-              let ocId = userInfo["ocId"] as? String
-        else { return }
-
-        if metadatas.firstIndex(where: {$0.ocId == ocId}) != nil {
-            deleteFile(notification)
-        }
-    }
-
-    @objc func hidePlayerToolBar(_ notification: NSNotification) {
-
-        if let userInfo = notification.userInfo as NSDictionary?, let ocId = userInfo["ocId"] as? String {
-            if currentViewController.metadata.ocId == ocId {
-                changeScreenMode(mode: .full)
-            }
-        }
-    }
-
-    @objc func showPlayerToolBar(_ notification: NSNotification) {
-
-        if let userInfo = notification.userInfo as NSDictionary?, let ocId = userInfo["ocId"] as? String, let enableTimerAutoHide = userInfo["enableTimerAutoHide"] as? Bool {
-            if currentViewController.metadata.ocId == ocId, let playerToolBar = currentViewController.playerToolBar, !playerToolBar.isPictureInPictureActive() {
-                changeScreenMode(mode: .normal, enableTimerAutoHide: enableTimerAutoHide)
-            }
-        }
-    }
-    
-    @objc func reloadMediaPage(_ notification: NSNotification) {
-        
-        self.reloadCurrentPage()
-    }
-    
     @objc func applicationDidBecomeActive(_ notification: NSNotification) {
-
         progressView.progress = 0
+        changeScreenMode(mode: .normal)
     }
 
     // MARK: - Command Center
 
-    func updateCommandCenter(ncplayer: NCPlayer, metadata: tableMetadata) {
+    func updateCommandCenter(ncplayer: NCPlayer, title: String) {
 
         var nowPlayingInfo = [String: Any]()
 
-        // Clear
-        clearCommandCenter()
         UIApplication.shared.beginReceivingRemoteControlEvents()
 
         // Add handler for Play Command
         MPRemoteCommandCenter.shared().playCommand.isEnabled = true
         playCommand = MPRemoteCommandCenter.shared().playCommand.addTarget { _ in
 
-            if !ncplayer.isPlay() {
+            if !ncplayer.isPlaying() {
                 ncplayer.playerPlay()
                 return .success
             }
@@ -360,35 +421,32 @@ class NCViewerMediaPage: UIViewController {
         MPRemoteCommandCenter.shared().pauseCommand.isEnabled = true
         pauseCommand = MPRemoteCommandCenter.shared().pauseCommand.addTarget { _ in
 
-            if ncplayer.isPlay() {
+            if ncplayer.isPlaying() {
                 ncplayer.playerPause()
                 return .success
             }
             return .commandFailed
         }
 
-        // VIDEO / AUDIO () ()
-        if metadata.classFile == NCCommunicationCommon.typeClassFile.video.rawValue || metadata.classFile == NCCommunicationCommon.typeClassFile.audio.rawValue {
+        // >>
+        MPRemoteCommandCenter.shared().skipForwardCommand.isEnabled = true
+        skipForwardCommand = MPRemoteCommandCenter.shared().skipForwardCommand.addTarget { event in
 
-            MPRemoteCommandCenter.shared().skipForwardCommand.isEnabled = true
-            skipForwardCommand = MPRemoteCommandCenter.shared().skipForwardCommand.addTarget { event in
-
-                let seconds = Float64((event as! MPSkipIntervalCommandEvent).interval)
-                self.currentViewController.playerToolBar?.skip(seconds: seconds)
-                return.success
-            }
-
-            MPRemoteCommandCenter.shared().skipBackwardCommand.isEnabled = true
-            skipBackwardCommand = MPRemoteCommandCenter.shared().skipBackwardCommand.addTarget { event in
-
-                let seconds = Float64((event as! MPSkipIntervalCommandEvent).interval)
-                self.currentViewController.playerToolBar?.skip(seconds: -seconds)
-                return.success
-            }
+            let seconds = Int32((event as? MPSkipIntervalCommandEvent)?.interval ?? 0)
+            ncplayer.player.jumpForward(seconds)
+            return.success
         }
 
-        nowPlayingInfo[MPMediaItemPropertyTitle] = metadata.fileNameView
-        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = ncplayer.durationTime.seconds
+        // <<
+        MPRemoteCommandCenter.shared().skipBackwardCommand.isEnabled = true
+        skipBackwardCommand = MPRemoteCommandCenter.shared().skipBackwardCommand.addTarget { event in
+
+            let seconds = Int32((event as? MPSkipIntervalCommandEvent)?.interval ?? 0)
+            ncplayer.player.jumpBackward(seconds)
+            return.success
+        }
+
+        nowPlayingInfo[MPMediaItemPropertyTitle] = title
         if let image = currentViewController.image {
             nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in
                 return image
@@ -440,66 +498,37 @@ class NCViewerMediaPage: UIViewController {
 
 extension NCViewerMediaPage: UIPageViewControllerDelegate, UIPageViewControllerDataSource {
 
-    func shiftCurrentPage() {
-
-        if metadatas.count == 0 {
-            self.viewUnload()
-            return
-        }
-
-        var direction: UIPageViewController.NavigationDirection = .forward
-
-        if currentIndex == metadatas.count {
-            currentIndex -= 1
-            direction = .reverse
-        }
-
-        let viewerMedia = getViewerMedia(index: currentIndex, metadata: metadatas[currentIndex])
-        pageViewController.setViewControllers([viewerMedia], direction: direction, animated: true, completion: nil)
-    }
-    
-    func reloadCurrentPage() {
-
-        let viewerMedia = getViewerMedia(index: currentIndex, metadata: metadatas[currentIndex])
-        viewerMedia.autoPlay = false
-        pageViewController.setViewControllers([viewerMedia], direction: .forward, animated: false, completion: nil)
-    }
-    
-    func goTo(index: Int, direction: UIPageViewController.NavigationDirection, autoPlay: Bool) {
-
-        currentIndex = index
-
-        let viewerMedia = getViewerMedia(index: currentIndex, metadata: metadatas[currentIndex])
-        viewerMedia.autoPlay = autoPlay
-        pageViewController.setViewControllers([viewerMedia], direction: direction, animated: true, completion: nil)
-    }
-
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
+        guard currentIndex > 0,
+              let metadata = database.getMetadataFromOcId(ocIds[currentIndex - 1]) else { return nil }
 
-        if currentIndex == 0 { return nil }
-
-        let viewerMedia = getViewerMedia(index: currentIndex - 1, metadata: metadatas[currentIndex - 1])
+        let viewerMedia = getViewerMedia(index: currentIndex - 1, metadata: metadata)
         return viewerMedia
     }
 
     func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
+        guard currentIndex < ocIds.count - 1,
+              let metadata = database.getMetadataFromOcId(ocIds[currentIndex + 1]) else { return nil }
 
-        if currentIndex == metadatas.count - 1 { return nil }
-
-        let viewerMedia = getViewerMedia(index: currentIndex + 1, metadata: metadatas[currentIndex + 1])
+        let viewerMedia = getViewerMedia(index: currentIndex + 1, metadata: metadata)
         return viewerMedia
     }
 
     // START TRANSITION
     func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
 
-        // Save time video
-        if let ncplayer = currentViewController.ncplayer, ncplayer.isPlay() {
-            ncplayer.saveCurrentTime()
-        }
-
         guard let nextViewController = pendingViewControllers.first as? NCViewerMedia else { return }
         nextIndex = nextViewController.index
+
+        if nextViewController.metadata.isImage {
+            navigationItem.rightBarButtonItems = [moreNavigationItem, imageDetailNavigationItem]
+        } else {
+            navigationItem.rightBarButtonItems = [moreNavigationItem]
+        }
+
+        if nextViewController.detailView.isShown {
+            changeScreenMode(mode: .normal)
+        }
     }
 
     // END TRANSITION
@@ -507,11 +536,15 @@ extension NCViewerMediaPage: UIPageViewControllerDelegate, UIPageViewControllerD
 
         if completed && nextIndex != nil {
             previousViewControllers.forEach { viewController in
-                let viewerMedia = viewController as! NCViewerMedia
-                viewerMedia.ncplayer?.deactivateObserver()
+                let viewerMedia = viewController as? NCViewerMedia
+                viewerMedia?.ncplayer?.playerStop()
+                viewerMedia?.closeDetail()
             }
             currentIndex = nextIndex!
         }
+
+        changeScreenMode(mode: viewerMediaScreenMode)
+        startTimerAutoHide()
 
         self.nextIndex = nil
     }
@@ -522,7 +555,6 @@ extension NCViewerMediaPage: UIPageViewControllerDelegate, UIPageViewControllerD
 extension NCViewerMediaPage: UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-
         if let gestureRecognizer = gestureRecognizer as? UIPanGestureRecognizer {
             let velocity = gestureRecognizer.velocity(in: self.view)
 
@@ -558,54 +590,81 @@ extension NCViewerMediaPage: UIGestureRecognizerDelegate {
     }
 
     @objc func didSingleTapWith(gestureRecognizer: UITapGestureRecognizer) {
+        if currentViewController.detailView.isShown { return }
 
-        if let playerToolBar = currentViewController.playerToolBar, playerToolBar.isPictureInPictureActive() {
-            playerToolBar.pictureInPictureController?.stopPictureInPicture()
-        }
-
-        if currentScreenMode == .full {
-
-            changeScreenMode(mode: .normal, enableTimerAutoHide: true)
-
+        if viewerMediaScreenMode == .full {
+            changeScreenMode(mode: .normal)
         } else {
-
             changeScreenMode(mode: .full)
         }
     }
 
-    //
-    // LIVE PHOTO
-    //
+    // MARK: - Live Photo
     @objc func didLongpressGestureEvent(gestureRecognizer: UITapGestureRecognizer) {
 
-        if !currentViewController.metadata.livePhoto { return }
+        if !currentViewController.metadata.isLivePhoto || currentViewController.detailView.isShown { return }
 
         if gestureRecognizer.state == .began {
-
-            currentViewController.updateViewConstraints()
-            currentViewController.statusViewImage.isHidden = true
-            currentViewController.statusLabel.isHidden = true
-
-            let fileName = (currentViewController.metadata.fileNameView as NSString).deletingPathExtension + ".mov"
-            if let metadata = NCManageDatabase.shared.getMetadata(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@ AND fileNameView LIKE[c] %@", currentViewController.metadata.account, currentViewController.metadata.serverUrl, fileName)), CCUtility.fileProviderStorageExists(metadata) {
-
+            if let metadataLive = NCManageDatabase.shared.getMetadataLivePhoto(metadata: currentViewController.metadata),
+               utilityFileSystem.fileProviderStorageExists(metadataLive) {
                 AudioServicesPlaySystemSound(1519) // peek feedback
-
-                let urlVideo = NCKTVHTTPCache.shared.getVideoURL(metadata: metadata)
-                
-                if let url = urlVideo.url {
-                    self.ncplayerLivePhoto = NCPlayer.init(url: url, autoPlay: true, isProxy: urlVideo.isProxy, imageVideoContainer: self.currentViewController.imageVideoContainer, playerToolBar: nil, metadata: metadata, detailView: nil, viewController: self)
-                    self.ncplayerLivePhoto?.openAVPlayer()
-                }
+                currentViewController.playLivePhoto(filePath: utilityFileSystem.getDirectoryProviderStorageOcId(metadataLive.ocId, fileNameView: metadataLive.fileName))
             }
-
         } else if gestureRecognizer.state == .ended {
-
-            currentViewController.statusViewImage.isHidden = false
-            currentViewController.statusLabel.isHidden = false
-            currentViewController.imageVideoContainer.image = currentViewController.image
-            ncplayerLivePhoto?.videoLayer?.removeFromSuperlayer()
-            ncplayerLivePhoto?.deactivateObserver()
+            currentViewController.stopLivePhoto()
         }
+    }
+}
+
+extension UIPageViewController {
+
+    @objc func enableSwipeGesture() {
+        for view in self.view.subviews {
+            if let subView = view as? UIScrollView {
+                subView.isScrollEnabled = true
+            }
+        }
+    }
+
+    @objc func disableSwipeGesture() {
+        for view in self.view.subviews {
+            if let subView = view as? UIScrollView {
+                subView.isScrollEnabled = false
+            }
+        }
+    }
+}
+
+extension NCViewerMediaPage: NCViewerMediaViewDelegate {
+    func didOpenDetail() {
+        changeScreenMode(mode: .normal)
+        imageDetailNavigationItem.image = NCUtility().loadImage(named: "info.circle.fill")
+    }
+
+    func didCloseDetail() {
+        imageDetailNavigationItem.image = NCUtility().loadImage(named: "info.circle")
+    }
+}
+
+extension NCViewerMediaPage: UIScrollViewDelegate {
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        preventScrollOnDragAndDrop = false
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if preventScrollOnDragAndDrop {
+            scrollView.setContentOffset(CGPoint(x: view.frame.width + 10, y: 0), animated: false)
+        }
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate {
+            preventScrollOnDragAndDrop = true
+        }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        preventScrollOnDragAndDrop = true
     }
 }

@@ -22,64 +22,49 @@
 //
 
 import Foundation
+import UIKit
+import UniformTypeIdentifiers
+import NextcloudKit
 
 extension NCShareExtension {
-
     @objc func reloadDatasource(withLoadFolder: Bool) {
+        let layoutForView = NCManageDatabase.shared.getLayoutForView(account: session.account, key: keyLayout, serverUrl: serverUrl) ?? NCDBLayoutForView()
+        let predicate = NSPredicate(format: "account == %@ AND serverUrl == %@ AND directory == true", session.account, serverUrl)
+        let metadatas = self.database.getResultsMetadatasPredicate(predicate, layoutForView: layoutForView)
 
-        var groupByField = "name"
-
-        layoutForView = NCUtility.shared.getLayoutForView(key: keyLayout, serverUrl: serverUrl)
-
-        // set GroupField for Grid
-        if layoutForView?.layout == NCGlobal.shared.layoutGrid {
-            groupByField = "classFile"
-        }
-
-        let metadatas = NCManageDatabase.shared.getMetadatas(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@ AND directory == true", activeAccount.account, serverUrl))
-        self.dataSource = NCDataSource(
-            metadatas: metadatas,
-            account: activeAccount.account,
-            sort: layoutForView?.sort,
-            ascending: layoutForView?.ascending,
-            directoryOnTop: layoutForView?.directoryOnTop,
-            favoriteOnTop: true,
-            filterLivePhoto: true,
-            groupByField: groupByField)
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas)
 
         if withLoadFolder {
             loadFolder()
         } else {
             self.refreshControl.endRefreshing()
         }
-
         collectionView.reloadData()
     }
 
     @objc func didCreateFolder(_ notification: NSNotification) {
-
         guard let userInfo = notification.userInfo as NSDictionary?,
               let ocId = userInfo["ocId"] as? String,
-              let metadata = NCManageDatabase.shared.getMetadataFromOcId(ocId)
+              let metadata = self.database.getMetadataFromOcId(ocId)
         else { return }
 
         self.serverUrl += "/" + metadata.fileName
         self.reloadDatasource(withLoadFolder: true)
-        self.setNavigationBar(navigationTitle: metadata.fileName)
+        self.setNavigationBar(navigationTitle: metadata.fileNameView)
     }
 
     func loadFolder() {
-
-        networkInProgress = true
-        collectionView.reloadData()
-
-        NCNetworking.shared.readFolder(serverUrl: serverUrl, account: activeAccount.account) { _, metadataFolder, _, _, _, _, errorCode, errorDescription in
-
+        NCNetworking.shared.readFolder(serverUrl: serverUrl,
+                                       account: session.account,
+                                       checkResponseDataChanged: false,
+                                       queue: .main) { task in
+            self.dataSourceTask = task
+            self.collectionView.reloadData()
+        } completion: { _, metadataFolder, _, _, error in
             DispatchQueue.main.async {
-                if errorCode != 0 {
-                    self.showAlert(description: errorDescription)
+                if error != .success {
+                    self.showAlert(description: error.errorDescription)
                 }
-                self.networkInProgress = false
                 self.metadataFolder = metadataFolder
                 self.reloadDatasource(withLoadFolder: false)
             }
@@ -89,7 +74,7 @@ extension NCShareExtension {
 
 class NCFilesExtensionHandler {
     var itemsProvider: [NSItemProvider] = []
-    lazy var filesName: [String] = []
+    lazy var fileNames: [String] = []
     let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH-mm-ss-"
@@ -98,24 +83,29 @@ class NCFilesExtensionHandler {
 
     @discardableResult
     init(items: [NSExtensionItem], completion: @escaping ([String]) -> Void) {
-        CCUtility.emptyTemporaryDirectory()
+        NCUtilityFileSystem().emptyTemporaryDirectory()
         var counter = 0
 
         self.itemsProvider = items.compactMap({ $0.attachments }).flatMap { $0.filter({
-            $0.hasItemConformingToTypeIdentifier(kUTTypeItem as String) || $0.hasItemConformingToTypeIdentifier("public.url")
+            $0.hasItemConformingToTypeIdentifier(UTType.item.identifier as String) || $0.hasItemConformingToTypeIdentifier("public.url")
         }) }
 
         for (ix, provider) in itemsProvider.enumerated() {
             provider.loadItem(forTypeIdentifier: provider.typeIdentifier) { [self] item, error in
                 defer {
                     counter += 1
-                    if counter == itemsProvider.count { completion(self.filesName) }
+                    if counter == itemsProvider.count { completion(self.fileNames) }
                 }
                 guard error == nil else { return }
                 var originalName = (dateFormatter.string(from: Date())) + String(ix)
 
                 if let url = item as? URL, url.isFileURL, !url.lastPathComponent.isEmpty {
                     originalName = url.lastPathComponent
+
+                    if fileNames.contains(originalName) {
+                        let incrementalNumber = NCKeychain().incrementalNumber
+                        originalName = "\(url.deletingPathExtension().lastPathComponent) \(incrementalNumber).\(url.pathExtension)"
+                    }
                 }
 
                 var fileName: String?
@@ -131,7 +121,9 @@ class NCFilesExtensionHandler {
                 default: return
                 }
 
-                if let fileName = fileName, !filesName.contains(fileName) { filesName.append(fileName) }
+                if let fileName, !fileNames.contains(fileName) {
+                    fileNames.append(fileName)
+                }
             }
         }
     }
@@ -140,8 +132,7 @@ class NCFilesExtensionHandler {
     func getItem(image: UIImage, fileName: String) -> String? {
         var fileUrl = URL(fileURLWithPath: NSTemporaryDirectory() + fileName)
         if fileUrl.pathExtension.isEmpty { fileUrl.appendPathExtension("png") }
-        guard let pngImageData = image.pngData(),
-              (try? pngImageData.write(to: fileUrl, options: [.atomic])) != nil
+        guard let pngImageData = image.pngData(), (try? pngImageData.write(to: fileUrl, options: [.atomic])) != nil
         else { return nil }
         return fileUrl.lastPathComponent
     }
@@ -151,7 +142,7 @@ class NCFilesExtensionHandler {
     func getItem(url: URL, fileName: String) -> String? {
         var fileName = fileName
         guard url.isFileURL else {
-            guard !filesName.contains(url.lastPathComponent) else { return nil }
+            guard !fileNames.contains(url.lastPathComponent) else { return nil }
             if !url.deletingPathExtension().lastPathComponent.isEmpty { fileName = url.deletingPathExtension().lastPathComponent }
             fileName += "." + (url.pathExtension.isEmpty ? "html" : url.pathExtension)
             let filenamePath = NSTemporaryDirectory() + fileName
@@ -213,6 +204,6 @@ class NCFilesExtensionHandler {
 extension NSItemProvider {
     var typeIdentifier: String {
         if hasItemConformingToTypeIdentifier("public.url") { return "public.url" } else
-        if hasItemConformingToTypeIdentifier(kUTTypeItem as String) { return kUTTypeItem as String } else { return "" }
+        if hasItemConformingToTypeIdentifier(UTType.item.identifier as String) { return UTType.item.identifier as String } else { return "" }
     }
 }

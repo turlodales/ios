@@ -27,53 +27,71 @@
 
 import UIKit
 import FloatingPanel
-import NCCommunication
+import NextcloudKit
 import Queuer
 
 extension NCCollectionViewCommon {
-
-    func toggleMenu(metadata: tableMetadata, imageIcon: UIImage?) {
-
+    func toggleMenu(metadata: tableMetadata, image: UIImage?) {
+        guard let metadata = database.getMetadataFromOcId(metadata.ocId),
+              let sceneIdentifier = self.controller?.sceneIdentifier else {
+            return
+        }
+        let tableLocalFile = database.getResultsTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId))?.first
+        let fileExists = NCUtilityFileSystem().fileProviderStorageExists(metadata)
         var actions = [NCMenuAction]()
-
-        guard let metadata = NCManageDatabase.shared.getMetadataFromOcId(metadata.ocId) else { return }
         let serverUrl = metadata.serverUrl + "/" + metadata.fileName
-        let isFolderEncrypted = CCUtility.isFolderEncrypted(metadata.serverUrl, e2eEncrypted: metadata.e2eEncrypted, account: metadata.account, urlBase: metadata.urlBase)
-        let serverUrlHome = NCUtilityFileSystem.shared.getHomeServer(account: appDelegate.account)
-        let isOffline: Bool
-
-        if metadata.directory, let directory = NCManageDatabase.shared.getTableDirectory(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", appDelegate.account, serverUrl)) {
-            isOffline = directory.offline
-        } else if let localFile = NCManageDatabase.shared.getTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId)) {
-            isOffline = localFile.offline
-        } else { isOffline = false }
-
-        let editors = NCUtility.shared.isDirectEditing(account: metadata.account, contentType: metadata.contentType)
-        let isRichDocument = NCUtility.shared.isRichDocument(metadata)
-
+        var isOffline: Bool = false
+        let applicationHandle = NCApplicationHandle()
         var iconHeader: UIImage!
 
-        if imageIcon != nil {
-            iconHeader = imageIcon!
+        if metadata.directory, let directory = database.getTableDirectory(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", session.account, serverUrl)) {
+            isOffline = directory.offline
+        } else if let localFile = database.getTableLocalFile(predicate: NSPredicate(format: "ocId == %@", metadata.ocId)) {
+            isOffline = localFile.offline
+        }
+
+        if let image {
+            iconHeader = image
         } else {
             if metadata.directory {
-                iconHeader = NCBrandColor.cacheImages.folder
+                iconHeader = imageCache.getFolder(account: metadata.account)
             } else {
-                iconHeader = NCBrandColor.cacheImages.file
+                iconHeader = imageCache.getImageFile()
             }
         }
 
         actions.append(
             NCMenuAction(
                 title: metadata.fileNameView,
+                boldTitle: true,
                 icon: iconHeader,
+                order: 0,
                 action: nil
             )
         )
 
+        actions.append(.seperator(order: 1))
+
+        //
+        // DETAILS
+        //
+        if NCNetworking.shared.isOnline,
+           !NCCapabilities.shared.disableSharesView(account: metadata.account) {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_details_", comment: ""),
+                    icon: utility.loadImage(named: "info.circle", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 10,
+                    action: { _ in
+                        NCActionCenter.shared.openShare(viewController: self, metadata: metadata, page: .activity)
+                    }
+                )
+            )
+        }
+
         if metadata.lock {
             var lockOwnerName = metadata.lockOwnerDisplayName.isEmpty ? metadata.lockOwner : metadata.lockOwnerDisplayName
-            var lockIcon = NCUtility.shared.loadUserImage(for: metadata.lockOwner, displayName: lockOwnerName, userBaseUrl: metadata)
+            var lockIcon = utility.loadUserImage(for: metadata.lockOwner, displayName: lockOwnerName, urlBase: metadata.urlBase)
             if metadata.lockOwnerType != 0 {
                 lockOwnerName += " app"
                 if !metadata.lockOwnerEditor.isEmpty, let appIcon = UIImage(named: metadata.lockOwnerEditor) {
@@ -99,11 +117,86 @@ extension NCCollectionViewCommon {
                     title: String(format: NSLocalizedString("_locked_by_", comment: ""), lockOwnerName),
                     details: lockTimeString,
                     icon: lockIcon,
+                    order: 20,
                     action: nil)
             )
         }
 
-        actions.append(.seperator)
+        //
+        // VIEW IN FOLDER
+        //
+        if NCNetworking.shared.isOnline,
+           layoutKey != NCGlobal.shared.layoutViewFiles {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_view_in_folder_", comment: ""),
+                    icon: utility.loadImage(named: "questionmark.folder", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 21,
+                    action: { _ in
+                        NCActionCenter.shared.openFileViewInFolder(serverUrl: metadata.serverUrl, fileNameBlink: metadata.fileName, fileNameOpen: nil, sceneIdentifier: sceneIdentifier)
+                    }
+                )
+            )
+        }
+
+        //
+        // LOCK / UNLOCK
+        //
+        if NCNetworking.shared.isOnline,
+           !metadata.directory,
+           metadata.canUnlock(as: metadata.userId),
+           !NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityFilesLockVersion.isEmpty {
+            actions.append(NCMenuAction.lockUnlockFiles(shouldLock: !metadata.lock, metadatas: [metadata], order: 30))
+        }
+
+        //
+        // SET FOLDER E2EE
+        //
+        if NCNetworking.shared.isOnline,
+           metadata.canSetDirectoryAsE2EE {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_e2e_set_folder_encrypted_", comment: ""),
+                    icon: utility.loadImage(named: "lock", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 30,
+                    action: { _ in
+                        Task {
+                            let error = await NCNetworkingE2EEMarkFolder().markFolderE2ee(account: metadata.account, fileName: metadata.fileName, serverUrl: metadata.serverUrl, userId: metadata.userId)
+                            if error != .success {
+                                NCContentPresenter().showError(error: error)
+                            }
+                        }
+                    }
+                )
+            )
+        }
+
+        //
+        // UNSET FOLDER E2EE
+        //
+        if NCNetworking.shared.isOnline,
+           metadata.canUnsetDirectoryAsE2EE {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_e2e_remove_folder_encrypted_", comment: ""),
+                    icon: utility.loadImage(named: "lock", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 30,
+                    action: { _ in
+                        NextcloudKit.shared.markE2EEFolder(fileId: metadata.fileId, delete: true, account: metadata.account) { _, _, error in
+                            if error == .success {
+                                self.database.deleteE2eEncryption(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", metadata.account, serverUrl))
+                                self.database.setDirectory(serverUrl: serverUrl, encrypted: false, account: metadata.account)
+                                self.database.setMetadataEncrypted(ocId: metadata.ocId, encrypted: false)
+
+                                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterChangeStatusFolderE2EE, userInfo: ["serverUrl": metadata.serverUrl])
+                            } else {
+                                NCContentPresenter().messageNotification(NSLocalizedString("_e2e_error_", comment: ""), error: error, delay: NCGlobal.shared.dismissAfterSecond, type: .error)
+                            }
+                        }
+                    }
+                )
+            )
+        }
 
         //
         // FAVORITE
@@ -113,11 +206,12 @@ extension NCCollectionViewCommon {
             actions.append(
                 NCMenuAction(
                     title: metadata.favorite ? NSLocalizedString("_remove_favorites_", comment: "") : NSLocalizedString("_add_favorites_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "star.fill", color: NCBrandColor.shared.yellowFavorite),
+                    icon: utility.loadImage(named: metadata.favorite ? "star.slash" : "star", colors: [NCBrandColor.shared.yellowFavorite]),
+                    order: 50,
                     action: { _ in
-                        NCNetworking.shared.favoriteMetadata(metadata) { errorCode, errorDescription in
-                            if errorCode != 0 {
-                                NCContentPresenter.shared.messageNotification("_error_", description: errorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: errorCode)
+                        NCNetworking.shared.favoriteMetadata(metadata) { error in
+                            if error != .success {
+                                NCContentPresenter().showError(error: error)
                             }
                         }
                     }
@@ -126,132 +220,84 @@ extension NCCollectionViewCommon {
         }
 
         //
-        // DETAIL
-        //
-        if !isFolderEncrypted && !appDelegate.disableSharesView {
-            actions.append(
-                NCMenuAction(
-                    title: NSLocalizedString("_details_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "info"),
-                    action: { _ in
-                        NCFunctionCenter.shared.openShare(viewController: self, metadata: metadata, indexPage: .activity)
-                    }
-                )
-            )
-        }
-        
-        //
-        // LOCK / UNLOCK
-        //
-        let hasLockCapability = NCManageDatabase.shared.getCapabilitiesServerInt(account: appDelegate.account, elements: NCElementsJSON.shared.capabilitiesFilesLockVersion) >= 1
-        if !metadata.directory, metadata.canUnlock(as: appDelegate.userId), hasLockCapability {
-            let lockAction = NCMenuAction.lockUnlockFiles(shouldLock: !metadata.lock, metadatas: [metadata])
-            if metadata.lock {
-                // make unlock first action, after info rows & seperator
-                actions.insert(lockAction, at: 3)
-            } else {
-                actions.append(lockAction)
-            }
-        }
-
-        //
         // OFFLINE
         //
-        if !isFolderEncrypted {
-            actions.append(.setAvailableOfflineAction(selectedMetadatas: [metadata], isAnyOffline: isOffline, viewController: self, completion: {
+        if NCNetworking.shared.isOnline,
+           metadata.canSetAsAvailableOffline {
+            actions.append(.setAvailableOfflineAction(selectedMetadatas: [metadata], isAnyOffline: isOffline, viewController: self, order: 60, completion: {
                 self.reloadDataSource()
             }))
         }
 
         //
-        // OPEN with external editor
+        // SHARE
         //
-        if metadata.classFile == NCCommunicationCommon.typeClassFile.document.rawValue && editors.contains(NCGlobal.shared.editorText) && ((editors.contains(NCGlobal.shared.editorOnlyoffice) || isRichDocument)) {
+        if (NCNetworking.shared.isOnline || (tableLocalFile != nil && fileExists)) && metadata.canShare {
+            actions.append(.share(selectedMetadatas: [metadata], controller: self.controller, order: 80))
+        }
 
-            var editor = ""
-            var title = ""
-            var icon: UIImage?
-
-            if editors.contains(NCGlobal.shared.editorOnlyoffice) {
-                editor = NCGlobal.shared.editorOnlyoffice
-                title = NSLocalizedString("_open_in_onlyoffice_", comment: "")
-                icon = NCUtility.shared.loadImage(named: "onlyoffice")
-            } else if isRichDocument {
-                editor = NCGlobal.shared.editorCollabora
-                title = NSLocalizedString("_open_in_collabora_", comment: "")
-                icon = NCUtility.shared.loadImage(named: "collabora")
-            }
-
-            if editor != "" {
-                actions.append(
-                    NCMenuAction(
-                        title: title,
-                        icon: icon!,
-                        action: { _ in
-                            NCViewer.shared.view(viewController: self, metadata: metadata, metadatas: [metadata], imageIcon: imageIcon, editor: editor, isRichDocument: isRichDocument)
-                        }
-                    )
+        //
+        // SAVE LIVE PHOTO
+        //
+        if NCNetworking.shared.isOnline,
+           let metadataMOV = database.getMetadataLivePhoto(metadata: metadata),
+           let hudView = self.tabBarController?.view {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_livephoto_save_", comment: ""),
+                    icon: NCUtility().loadImage(named: "livephoto", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 100,
+                    action: { _ in
+                        NCNetworking.shared.saveLivePhotoQueue.addOperation(NCOperationSaveLivePhoto(metadata: metadata, metadataMOV: metadataMOV, hudView: hudView))
+                    }
                 )
-            }
-        }
-
-        //
-        // OPEN IN
-        //
-        if !metadata.directory && !NCBrandOptions.shared.disable_openin_file {
-            actions.append(.openInAction(selectedMetadatas: [metadata], viewController: self))
-        }
-
-        //
-        // PRINT
-        //
-        if metadata.isPrintable {
-            actions.append(.printAction(metadata: metadata))
-        }
-
-        //
-        // SAVE
-        //
-        if (metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue && metadata.contentType != "image/svg+xml") || metadata.classFile == NCCommunicationCommon.typeClassFile.video.rawValue {
-            actions.append(.saveMediaAction(selectedMediaMetadatas: [metadata]))
+            )
         }
 
         //
         // SAVE AS SCAN
         //
-        if #available(iOS 13.0, *) {
-            if metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue && metadata.contentType != "image/svg+xml" {
-                actions.append(
-                    NCMenuAction(
-                        title: NSLocalizedString("_save_as_scan_", comment: ""),
-                        icon: NCUtility.shared.loadImage(named: "viewfinder.circle"),
-                        action: { _ in
-                            NCFunctionCenter.shared.openDownload(metadata: metadata, selector: NCGlobal.shared.selectorSaveAsScan)
+        if NCNetworking.shared.isOnline,
+           metadata.isSavebleAsImage {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_save_as_scan_", comment: ""),
+                    icon: utility.loadImage(named: "doc.viewfinder", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 110,
+                    action: { _ in
+                        if self.utilityFileSystem.fileProviderStorageExists(metadata) {
+                            NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterDownloadedFile,
+                                                                        object: nil,
+                                                                        userInfo: ["ocId": metadata.ocId,
+                                                                                   "ocIdTransfer": metadata.ocIdTransfer,
+                                                                                   "session": metadata.session,
+                                                                                   "selector": NCGlobal.shared.selectorSaveAsScan,
+                                                                                   "error": NKError(),
+                                                                                   "account": metadata.account],
+                                                                        second: 0.5)
+                        } else {
+                            guard let metadata = self.database.setMetadatasSessionInWaitDownload(metadatas: [metadata],
+                                                                                                 session: NCNetworking.shared.sessionDownload,
+                                                                                                 selector: NCGlobal.shared.selectorSaveAsScan,
+                                                                                                 sceneIdentifier: sceneIdentifier) else { return }
+                            NCNetworking.shared.download(metadata: metadata, withNotificationProgressTask: true)
                         }
-                    )
+                    }
                 )
-            }
+            )
         }
 
         //
         // RENAME
         //
-        if !(isFolderEncrypted && metadata.serverUrl == serverUrlHome), !metadata.lock {
+        if metadata.isRenameable {
             actions.append(
                 NCMenuAction(
                     title: NSLocalizedString("_rename_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "pencil"),
+                    icon: utility.loadImage(named: "text.cursor", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 120,
                     action: { _ in
-
-                        if let vcRename = UIStoryboard(name: "NCRenameFile", bundle: nil).instantiateInitialViewController() as? NCRenameFile {
-
-                            vcRename.metadata = metadata
-                            vcRename.imagePreview = imageIcon
-
-                            let popup = NCPopupViewController(contentController: vcRename, popupWidth: vcRename.width, popupHeight: vcRename.height)
-
-                            self.present(popup, animated: true)
-                        }
+                        self.present(UIAlertController.renameFile(metadata: metadata), animated: true)
                     }
                 )
             )
@@ -260,42 +306,53 @@ extension NCCollectionViewCommon {
         //
         // COPY - MOVE
         //
-        if !isFolderEncrypted && serverUrl != "" {
-            actions.append(.moveOrCopyAction(selectedMetadatas: [metadata]))
+        if metadata.isCopyableMovable {
+            actions.append(.moveOrCopyAction(selectedMetadatas: [metadata], viewController: self, order: 130))
         }
 
         //
-        // COPY
+        // MODIFY WITH QUICK LOOK
         //
-        if !metadata.directory {
-            actions.append(.copyAction(selectOcId: [metadata.ocId], hudView: self.view))
-        }
-        
-        //
-        // MODIFY
-        //
-        if #available(iOS 13.0, *) {
-            if !isFolderEncrypted && metadata.contentType != "image/gif" && metadata.contentType != "image/svg+xml" && (metadata.contentType == "com.adobe.pdf" || metadata.contentType == "application/pdf" || metadata.classFile == NCCommunicationCommon.typeClassFile.image.rawValue) {
-                actions.append(
-                    NCMenuAction(
-                        title: NSLocalizedString("_modify_", comment: ""),
-                        icon: NCUtility.shared.loadImage(named: "pencil.tip.crop.circle"),
-                        action: { menuAction in
-                            NCFunctionCenter.shared.openDownload(metadata: metadata, selector: NCGlobal.shared.selectorLoadFileQuickLook)
+        if NCNetworking.shared.isOnline,
+           metadata.isModifiableWithQuickLook {
+            actions.append(
+                NCMenuAction(
+                    title: NSLocalizedString("_modify_", comment: ""),
+                    icon: utility.loadImage(named: "pencil.tip.crop.circle", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 150,
+                    action: { _ in
+                        if self.utilityFileSystem.fileProviderStorageExists(metadata) {
+                            NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterDownloadedFile,
+                                                                        object: nil,
+                                                                        userInfo: ["ocId": metadata.ocId,
+                                                                                   "ocIdTransfer": metadata.ocIdTransfer,
+                                                                                   "session": metadata.session,
+                                                                                   "selector": NCGlobal.shared.selectorLoadFileQuickLook,
+                                                                                   "error": NKError(),
+                                                                                   "account": metadata.account],
+                                                                        second: 0.5)
+                        } else {
+                            guard let metadata = self.database.setMetadatasSessionInWaitDownload(metadatas: [metadata],
+                                                                                                 session: NCNetworking.shared.sessionDownload,
+                                                                                                 selector: NCGlobal.shared.selectorLoadFileQuickLook,
+                                                                                                 sceneIdentifier: sceneIdentifier) else { return }
+                            NCNetworking.shared.download(metadata: metadata, withNotificationProgressTask: true)
                         }
-                    )
+                    }
                 )
-            }
+            )
         }
 
         //
         // COLOR FOLDER
         //
-        if self is NCFiles, metadata.directory {
+        if self is NCFiles,
+           metadata.directory {
             actions.append(
                 NCMenuAction(
                     title: NSLocalizedString("_change_color_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "palette"),
+                    icon: utility.loadImage(named: "paintpalette", colors: [NCBrandColor.shared.iconImageColor]),
+                    order: 160,
                     action: { _ in
                         if let picker = UIStoryboard(name: "NCColorPicker", bundle: nil).instantiateInitialViewController() as? NCColorPicker {
                             picker.metadata = metadata
@@ -307,66 +364,19 @@ extension NCCollectionViewCommon {
                 )
             )
         }
-        
+
         //
         // DELETE
         //
-        actions.append(.deleteAction(selectedMetadatas: [metadata], metadataFolder: metadataFolder, viewController: self))
-
-        //
-        // SET FOLDER E2EE
-        //
-        if !metadata.e2eEncrypted && metadata.directory && CCUtility.isEnd(toEndEnabled: appDelegate.account) && metadata.serverUrl == serverUrlHome && metadata.size == 0 {
-            actions.append(
-                NCMenuAction(
-                    title: NSLocalizedString("_e2e_set_folder_encrypted_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "lock"),
-                    action: { _ in
-                        NCCommunication.shared.markE2EEFolder(fileId: metadata.fileId, delete: false) { account, errorCode, errorDescription in
-                            if errorCode == 0 {
-                                NCManageDatabase.shared.deleteE2eEncryption(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", self.appDelegate.account, serverUrl))
-                                NCManageDatabase.shared.setDirectory(serverUrl: serverUrl, serverUrlTo: nil, etag: nil, ocId: nil, fileId: nil, encrypted: true, richWorkspace: nil, account: metadata.account)
-                                NCManageDatabase.shared.setMetadataEncrypted(ocId: metadata.ocId, encrypted: true)
-
-                                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterChangeStatusFolderE2EE, userInfo: ["serverUrl": metadata.serverUrl])
-                            } else {
-                                NCContentPresenter.shared.messageNotification(NSLocalizedString("_e2e_error_mark_folder_", comment: ""), description: errorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: .error, errorCode: errorCode)
-                            }
-                        }
-                    }
-                )
-            )
+        if metadata.isDeletable {
+            actions.append(.deleteAction(selectedMetadatas: [metadata], metadataFolder: metadataFolder, controller: self.controller, order: 170))
         }
 
-        //
-        // UNSET FOLDER E2EE
-        //
-        if metadata.e2eEncrypted && metadata.directory && CCUtility.isEnd(toEndEnabled: appDelegate.account) && metadata.serverUrl == serverUrlHome && metadata.size == 0 {
-            actions.append(
-                NCMenuAction(
-                    title: NSLocalizedString("_e2e_remove_folder_encrypted_", comment: ""),
-                    icon: NCUtility.shared.loadImage(named: "lock"),
-                    action: { _ in
-                        NCCommunication.shared.markE2EEFolder(fileId: metadata.fileId, delete: true) { account, errorCode, errorDescription in
-                            if errorCode == 0 {
-                                NCManageDatabase.shared.deleteE2eEncryption(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@", self.appDelegate.account, serverUrl))
-                                NCManageDatabase.shared.setDirectory(serverUrl: serverUrl, serverUrlTo: nil, etag: nil, ocId: nil, fileId: nil, encrypted: false, richWorkspace: nil, account: metadata.account)
-                                NCManageDatabase.shared.setMetadataEncrypted(ocId: metadata.ocId, encrypted: false)
-
-                                NotificationCenter.default.postOnMainThread(name: NCGlobal.shared.notificationCenterChangeStatusFolderE2EE, userInfo: ["serverUrl": metadata.serverUrl])
-                            } else {
-                                NCContentPresenter.shared.messageNotification(NSLocalizedString("_e2e_error_delete_mark_folder_", comment: ""), description: errorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: .error, errorCode: errorCode)
-                            }
-                        }
-                    }
-                )
-            )
-        }
+        applicationHandle.addCollectionViewCommonMenu(metadata: metadata, image: image, actions: &actions)
 
         presentMenu(with: actions)
     }
 }
-
 
 extension TimeInterval {
     func format() -> String? {

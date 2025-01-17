@@ -22,7 +22,7 @@
 
 import UIKit
 import DropDown
-import NCCommunication
+import NextcloudKit
 
 class NCShareUserCell: UITableViewCell, NCCellProtocol {
 
@@ -35,9 +35,16 @@ class NCShareUserCell: UITableViewCell, NCCellProtocol {
     @IBOutlet weak var labelQuickStatus: UILabel!
     @IBOutlet weak var imageDownArrow: UIImageView!
 
+    private var index = IndexPath()
+
     var tableShare: tableShare?
+    let utility = NCUtility()
     weak var delegate: NCShareUserCellDelegate?
 
+    var indexPath: IndexPath {
+        get { return index }
+        set { index = newValue }
+    }
     var fileAvatarImageView: UIImageView? {
         return imageItem
     }
@@ -54,18 +61,18 @@ class NCShareUserCell: UITableViewCell, NCCellProtocol {
             name: NSLocalizedString("_show_profile_", comment: ""),
             target: self,
             selector: #selector(tapAvatarImage))]
-
+        let permissions = NCPermissions()
         labelTitle.text = tableShare.shareWithDisplayname
-        labelTitle.textColor = NCBrandColor.shared.label
+        labelTitle.textColor = NCBrandColor.shared.textColor
         isUserInteractionEnabled = true
         labelQuickStatus.isHidden = false
         imageDownArrow.isHidden = false
         buttonMenu.isHidden = false
         buttonMenu.accessibilityLabel = NSLocalizedString("_more_", comment: "")
-        imageItem.image = NCShareCommon.shared.getImageShareType(shareType: tableShare.shareType)
+        imageItem.image = NCShareCommon().getImageShareType(shareType: tableShare.shareType)
 
-        let status = NCUtility.shared.getUserStatus(userIcon: tableShare.userIcon, userStatus: tableShare.userStatus, userMessage: tableShare.userMessage)
-        imageStatus.image = status.onlineStatus
+        let status = utility.getUserStatus(userIcon: tableShare.userIcon, userStatus: tableShare.userStatus, userMessage: tableShare.userMessage)
+        imageStatus.image = status.statusImage
         self.status.text = status.statusMessage
 
         // If the initiator or the recipient is not the current user, show the list of sharees without any options to edit it.
@@ -80,11 +87,11 @@ class NCShareUserCell: UITableViewCell, NCCellProtocol {
         btnQuickStatus.setTitle("", for: .normal)
         btnQuickStatus.contentHorizontalAlignment = .left
 
-        if tableShare.permissions == NCGlobal.shared.permissionCreateShare {
+        if tableShare.permissions == permissions.permissionCreateShare {
             labelQuickStatus.text = NSLocalizedString("_share_file_drop_", comment: "")
         } else {
             // Read Only
-            if CCUtility.isAnyPermission(toEdit: tableShare.permissions) {
+            if permissions.isAnyPermissionToEdit(tableShare.permissions) {
                 labelQuickStatus.text = NSLocalizedString("_share_editing_", comment: "")
             } else {
                 labelQuickStatus.text = NSLocalizedString("_share_read_only_", comment: "")
@@ -97,9 +104,8 @@ class NCShareUserCell: UITableViewCell, NCCellProtocol {
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(tapAvatarImage))
         imageItem?.addGestureRecognizer(tapGesture)
 
-        buttonMenu.setImage(UIImage(named: "shareMenu")?.image(color: .gray, size: 50), for: .normal)
         labelQuickStatus.textColor = NCBrandColor.shared.customer
-        imageDownArrow.image = NCUtility.shared.loadImage(named: "arrowtriangle.down.fill", color: NCBrandColor.shared.customer)
+        imageDownArrow.image = utility.loadImage(named: "arrowtriangle.down.circle", colors: [NCBrandColor.shared.customer])
     }
 
     @objc func tapAvatarImage(_ sender: UITapGestureRecognizer) {
@@ -132,7 +138,12 @@ class NCSearchUserDropDownCell: DropDownCell, NCCellProtocol {
     @IBOutlet weak var centerTitle: NSLayoutConstraint!
 
     private var user: String = ""
+    private var index = IndexPath()
 
+    var indexPath: IndexPath {
+        get { return index }
+        set { index = newValue }
+    }
     var fileAvatarImageView: UIImageView? {
         return imageItem
     }
@@ -141,11 +152,17 @@ class NCSearchUserDropDownCell: DropDownCell, NCCellProtocol {
         set { user = newValue ?? "" }
     }
 
-    func setupCell(sharee: NCCommunicationSharee, baseUrl: NCUserBaseUrl) {
-        imageItem.image = NCShareCommon.shared.getImageShareType(shareType: sharee.shareType)
-        imageShareeType.image = NCShareCommon.shared.getImageShareType(shareType: sharee.shareType)
-        let status = NCUtility.shared.getUserStatus(userIcon: sharee.userIcon, userStatus: sharee.userStatus, userMessage: sharee.userMessage)
-        imageStatus.image = status.onlineStatus
+    func setupCell(sharee: NKSharee, session: NCSession.Session) {
+        let utility = NCUtility()
+        imageItem.image = NCShareCommon().getImageShareType(shareType: sharee.shareType)
+        imageShareeType.image = NCShareCommon().getImageShareType(shareType: sharee.shareType)
+        let status = utility.getUserStatus(userIcon: sharee.userIcon, userStatus: sharee.userStatus, userMessage: sharee.userMessage)
+
+        if let statusImage = status.statusImage {
+            imageStatus.image = statusImage
+            imageStatus.makeCircularBackground(withColor: .systemBackground)
+        }
+
         self.status.text = status.statusMessage
         if self.status.text?.count ?? 0 > 0 {
             centerTitle.constant = -5
@@ -153,27 +170,24 @@ class NCSearchUserDropDownCell: DropDownCell, NCCellProtocol {
             centerTitle.constant = 0
         }
 
-        imageItem.image = NCUtility.shared.loadUserImage(
-            for: sharee.shareWith,
-               displayName: nil,
-               userBaseUrl: baseUrl)
+        imageItem.image = utility.loadUserImage(for: sharee.shareWith, displayName: nil, urlBase: session.urlBase)
 
-        let fileName = baseUrl.userBaseUrl + "-" + sharee.shareWith + ".png"
-        if NCManageDatabase.shared.getImageAvatarLoaded(fileName: fileName) == nil {
-            let fileNameLocalPath = String(CCUtility.getDirectoryUserData()) + "/" + fileName
+        let fileName = NCSession.shared.getFileName(urlBase: session.urlBase, user: sharee.shareWith)
+        let results = NCManageDatabase.shared.getImageAvatarLoaded(fileName: fileName)
+
+        if results.image == nil {
             let etag = NCManageDatabase.shared.getTableAvatar(fileName: fileName)?.etag
 
-            NCCommunication.shared.downloadAvatar(
+            NextcloudKit.shared.downloadAvatar(
                 user: sharee.shareWith,
-                fileNameLocalPath: fileNameLocalPath,
+                fileNameLocalPath: NCUtilityFileSystem().directoryUserData + "/" + fileName,
                 sizeImage: NCGlobal.shared.avatarSize,
                 avatarSizeRounded: NCGlobal.shared.avatarSizeRounded,
-                etag: etag) { _, imageAvatar, _, etag, errorCode, _ in
-
-                    if errorCode == 0, let etag = etag, let imageAvatar = imageAvatar {
+                etag: etag, account: session.account) { _, imageAvatar, _, etag, _, error in
+                    if error == .success, let etag = etag, let imageAvatar = imageAvatar {
                         NCManageDatabase.shared.addAvatar(fileName: fileName, etag: etag)
                         self.imageItem.image = imageAvatar
-                    } else if errorCode == NCGlobal.shared.errorNotModified, let imageAvatar = NCManageDatabase.shared.setAvatarLoaded(fileName: fileName) {
+                    } else if error.errorCode == NCGlobal.shared.errorNotModified, let imageAvatar = NCManageDatabase.shared.setAvatarLoaded(fileName: fileName) {
                         self.imageItem.image = imageAvatar
                     }
                 }

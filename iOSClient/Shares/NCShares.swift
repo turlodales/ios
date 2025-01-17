@@ -22,11 +22,9 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
 class NCShares: NCCollectionViewCommon {
-
-    // MARK: - View Life Cycle
 
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
@@ -34,78 +32,78 @@ class NCShares: NCCollectionViewCommon {
         titleCurrentFolder = NSLocalizedString("_list_shares_", comment: "")
         layoutKey = NCGlobal.shared.layoutViewShares
         enableSearchBar = false
-        headerMenuButtonsCommand = false
-        headerMenuButtonsView = true
         headerRichWorkspaceDisable = true
-        emptyImage = UIImage(named: "share")?.image(color: .gray, size: UIScreen.main.bounds.width)
+        emptyImageName = "person.fill.badge.plus"
         emptyTitle = "_list_shares_no_files_"
         emptyDescription = "_tutorial_list_shares_view_"
     }
 
-    // MARK: - DataSource + NC Endpoint
+    // MARK: - View Life Cycle
 
-    override func reloadDataSource(forced: Bool = true) {
-        super.reloadDataSource()
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
 
-        DispatchQueue.global().async {
-            let sharess = NCManageDatabase.shared.getTableShares(account: self.appDelegate.account)
-            var metadatas: [tableMetadata] = []
-            for share in sharess {
-                if let metadata = NCManageDatabase.shared.getMetadata(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@ AND fileName == %@", self.appDelegate.account, share.serverUrl, share.fileName)) {
-                    if !(metadatas.contains { $0.ocId == metadata.ocId }) {
-                        metadatas.append(metadata)
+        reloadDataSource()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+
+        getServerData()
+    }
+
+    // MARK: - DataSource
+
+    override func reloadDataSource() {
+        var ocId: [String] = []
+        let sharess = self.database.getTableShares(account: session.account)
+
+        for share in sharess {
+            if let result = self.database.getResultMetadata(predicate: NSPredicate(format: "account == %@ AND serverUrl == %@ AND fileName == %@", session.account, share.serverUrl, share.fileName)) {
+                if !(ocId.contains { $0 == result.ocId }) {
+                    ocId.append(result.ocId)
+                }
+            } else {
+                let serverUrlFileName = share.serverUrl + "/" + share.fileName
+                NCNetworking.shared.readFile(serverUrlFileName: serverUrlFileName, account: session.account) { task in
+                    self.dataSourceTask = task
+                    if self.dataSource.isEmpty() {
+                        self.collectionView.reloadData()
+                    }
+                } completion: { _, metadata, _ in
+                    if let metadata {
+                        self.database.addMetadata(metadata)
+                        if !(ocId.contains { $0 == metadata.ocId }) {
+                            ocId.append(metadata.ocId)
+                        }
                     }
                 }
             }
-
-            self.dataSource = NCDataSource(metadatas: metadatas,
-                                           account: self.appDelegate.account,
-                                           sort: self.layoutForView?.sort,
-                                           ascending: self.layoutForView?.ascending,
-                                           directoryOnTop: self.layoutForView?.directoryOnTop,
-                                           favoriteOnTop: true,
-                                           filterLivePhoto: true,
-                                           groupByField: self.groupByField,
-                                           providers: self.providers,
-                                           searchResults: self.searchResults)
-
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
-                self.collectionView.reloadData()
-            }
         }
+
+        let metadatas = self.database.getResultsMetadatasPredicate(NSPredicate(format: "ocId IN %@", ocId), layoutForView: layoutForView)
+
+        self.dataSource = NCCollectionViewDataSource(metadatas: metadatas, layoutForView: layoutForView)
+
+        super.reloadDataSource()
     }
 
-    override func reloadDataSourceNetwork(forced: Bool = false) {
-        super.reloadDataSourceNetwork(forced: forced)
-
-        isReloadDataSourceNetworkInProgress = true
-        collectionView?.reloadData()
-
-        // Shares network
-        NCCommunication.shared.readShares(parameters: NCCShareParameter(), queue: NCCommunicationCommon.shared.backgroundQueue) { account, shares, errorCode, errorDescription in
-
-            DispatchQueue.main.async {
-                self.refreshControl.endRefreshing()
-                self.isReloadDataSourceNetworkInProgress = false
+    override func getServerData() {
+        NextcloudKit.shared.readShares(parameters: NKShareParameter(), account: session.account) { task in
+            self.dataSourceTask = task
+            if self.dataSource.isEmpty() {
+                self.collectionView.reloadData()
             }
-
-            if errorCode == 0 {
-
-                NCManageDatabase.shared.deleteTableShare(account: account)
-                if shares != nil {
-                    NCManageDatabase.shared.addShare(urlBase: self.appDelegate.urlBase, account: account, shares: shares!)
+        } completion: { account, shares, _, error in
+            if error == .success {
+                self.database.deleteTableShare(account: account)
+                if let shares = shares, !shares.isEmpty {
+                    let home = self.utilityFileSystem.getHomeServer(session: self.session)
+                    self.database.addShare(account: account, home: home, shares: shares)
                 }
-                self.appDelegate.shares = NCManageDatabase.shared.getTableShares(account: account)
                 self.reloadDataSource()
-
-            } else {
-
-                DispatchQueue.main.async {
-                    self.collectionView?.reloadData()
-                    NCContentPresenter.shared.messageNotification("_share_", description: errorDescription, delay: NCGlobal.shared.dismissAfterSecond, type: NCContentPresenter.messageType.error, errorCode: errorCode)
-                }
             }
+            self.refreshControl.endRefreshing()
         }
     }
 }

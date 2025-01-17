@@ -22,24 +22,23 @@
 //
 
 import UIKit
-import NCCommunication
+import NextcloudKit
 
 extension tableShare: NCTableShareable { }
-extension NCCommunicationShare: NCTableShareable { }
+extension NKShare: NCTableShareable { }
 
 protocol NCTableShareable: AnyObject {
     var shareType: Int { get set }
     var permissions: Int { get set }
-
     var idShare: Int { get set }
     var shareWith: String { get set }
-
     var hideDownload: Bool { get set }
     var password: String { get set }
     var label: String { get set }
     var note: String { get set }
     var expirationDate: NSDate? { get set }
     var shareWithDisplayname: String { get set }
+    var attributes: String? { get set }
 }
 
 extension NCTableShareable {
@@ -62,6 +61,7 @@ extension NCTableShareable {
 }
 
 class NCTableShareOptions: NCTableShareable {
+
     var shareType: Int
     var permissions: Int
 
@@ -75,21 +75,27 @@ class NCTableShareOptions: NCTableShareable {
     var expirationDate: NSDate?
     var shareWithDisplayname: String = ""
 
+    var attributes: String?
+
     private init(shareType: Int, metadata: tableMetadata, password: String?) {
-        self.permissions = NCManageDatabase.shared.getCapabilitiesServerInt(account: metadata.account, elements: ["ocs", "data", "capabilities", "files_sharing", "default_permissions"]) & metadata.sharePermissionsCollaborationServices
+        if metadata.e2eEncrypted, NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityE2EEApiVersion == NCGlobal.shared.e2eeVersionV12 {
+            self.permissions = NCPermissions().permissionCreateShare
+        } else {
+            self.permissions = NCCapabilities.shared.getCapabilities(account: metadata.account).capabilityFileSharingDefaultPermission & metadata.sharePermissionsCollaborationServices
+        }
         self.shareType = shareType
         if let password = password {
             self.password = password
         }
     }
 
-    convenience init(sharee: NCCommunicationSharee, metadata: tableMetadata, password: String?) {
+    convenience init(sharee: NKSharee, metadata: tableMetadata, password: String?) {
         self.init(shareType: sharee.shareType, metadata: metadata, password: password)
         self.shareWith = sharee.shareWith
     }
 
     static func shareLink(metadata: tableMetadata, password: String?) -> NCTableShareOptions {
-        return NCTableShareOptions(shareType: NCShareCommon.shared.SHARE_TYPE_LINK, metadata: metadata, password: password)
+        return NCTableShareOptions(shareType: NCShareCommon().SHARE_TYPE_LINK, metadata: metadata, password: password)
     }
 }
 
@@ -100,7 +106,7 @@ protocol NCShareDetail {
 extension NCShareDetail where Self: UIViewController {
     func setNavigationTitle() {
         title = NSLocalizedString("_share_", comment: "") + " – "
-        if share.shareType == NCShareCommon.shared.SHARE_TYPE_LINK {
+        if share.shareType == NCShareCommon().SHARE_TYPE_LINK {
             title! += share.label.isEmpty ? NSLocalizedString("_share_link_", comment: "") : share.label
         } else {
             title! += share.shareWithDisplayname.isEmpty ? share.shareWith : share.shareWithDisplayname
